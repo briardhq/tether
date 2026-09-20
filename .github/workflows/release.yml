@@ -1,0 +1,110 @@
+# Pushing a `v*` tag publishes a GitHub Release: one static binary per platform, a SHA256SUMS
+# file and generated notes. Tag a commit on main, push the tag, and that is the whole procedure:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# A tag with a hyphen (`v0.2.0-rc.1`) publishes as a pre-release, which `releases/latest` —
+# where the README sends people — skips.
+#
+# The binaries come from `go build` in the dev shell rather than from the nix package. The code
+# is pure Go with cgo off, so one Linux runner cross-builds every target in seconds with the same
+# toolchain CI tested; nix stays the way to build from source, and ci.yml keeps proving that the
+# package is static.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  # The whole of ci.yml, run against the tagged commit, rather than trusting that it passed on its
+  # way in: a tag can point at any commit, including one that never went through main.
+  gate:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # create the release
+      id-token: write # sign the provenance attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: The tag is a version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tag $tag is not vMAJOR.MINOR.PATCH[-prerelease]"
+            exit 1
+          fi
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      # The file names are what the README tells people to download, and `install` copies the
+      # binary to a fixed name whatever it was called, so the platform suffix never outlives the
+      # download.
+      - name: Build every platform
+        run: |
+          nix develop --command bash -euo pipefail -c '
+            mkdir dist
+            ldflags="-s -w -X briard.io/tether/internal/build.Version=${GITHUB_REF_NAME}"
+            build() { # name GOOS GOARCH [GOARM]
+              CGO_ENABLED=0 GOOS=$2 GOARCH=$3 GOARM=${4:-} \
+                go build -trimpath -ldflags "$ldflags" -o "dist/$1" ./cmd/briard-tether
+            }
+            build briard-tether-linux-amd64       linux   amd64
+            build briard-tether-linux-arm64       linux   arm64
+            build briard-tether-linux-armv7       linux   arm   7
+            build briard-tether-windows-amd64.exe windows amd64
+            file dist/*
+          '
+
+      # The assertions that decide whether what is about to be published is what the tag says:
+      # the version is stamped, the platform names itself, and nothing links dynamically. The
+      # runner can execute only the amd64 build; the four share one -ldflags, so its answer
+      # stands for the rest (under -trimpath Go does not record -ldflags, so it cannot be read
+      # back from them). The ARM level is read from the build settings Go does embed — which is
+      # exactly where `version` reads it from.
+      - name: The binaries are what the tag says
+        run: |
+          nix develop --command bash -euo pipefail -c '
+            want="briard-tether ${GITHUB_REF_NAME} linux/amd64"
+            got=$(dist/briard-tether-linux-amd64 version)
+            [ "$got" = "$want" ] || { echo "::error::version says \"$got\", want \"$want\""; exit 1; }
+            for f in dist/briard-tether-linux-*; do
+              file "$f" | grep -q "statically linked" || { echo "::error::$f is not static"; exit 1; }
+            done
+            go version -m dist/briard-tether-linux-armv7 | grep -q "GOARM=7" \
+              || { echo "::error::the armv7 build does not carry GOARM=7"; exit 1; }
+            echo "amd64 reports ${GITHUB_REF_NAME}; linux builds static; armv7 is GOARM=7"
+          '
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS && cat SHA256SUMS
+
+      # Signed build provenance, checkable with
+      # `gh attestation verify <file> --repo briardhq/tether`. GitHub offers attestations to
+      # public repositories only (and private ones on Enterprise Cloud), so a private repo's
+      # practice release publishes without them rather than failing.
+      - uses: actions/attest-build-provenance@v2
+        if: ${{ !github.event.repository.private }}
+        with:
+          subject-path: dist/briard-tether-*
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pre=()
+          [[ "${GITHUB_REF_NAME}" == *-* ]] && pre=(--prerelease)
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --verify-tag --generate-notes --title "${GITHUB_REF_NAME}" "${pre[@]}"

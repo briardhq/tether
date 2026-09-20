@@ -1,0 +1,22 @@
+# Issues are for bugs; everything else routes elsewhere. blank_issues_enabled is
+# false on purpose: an empty box invites support questions into the bug tracker,
+# which is the failure mode this split exists to prevent.
+blank_issues_enabled: false
+contact_links:
+  - name: Questions, help, and "should this work like X?"
+    url: https://github.com/briardhq/tether/discussions
+    about: >-
+      Use Discussions for anything that is not a reproducible bug. Setup help,
+      client configuration, "is this supposed to happen?", and feature ideas all
+      belong there.
+  - name: An adapter that is not recognised
+    url: https://github.com/Koenkk/zigbee-herdsman/blob/master/src/adapter/adapterDiscovery.ts
+    about: >-
+      The adapter table is imported from zigbee-herdsman rather than maintained
+      here, so a stick missing from theirs is missing from ours. Open an issue
+      anyway and say which it is — the `radio` config key may already serve it.
+  - name: Security bug
+    url: mailto:security@briard.io
+    about: >-
+      Please email security@briard.io rather than opening a public issue, so it
+      can be fixed before it is public.

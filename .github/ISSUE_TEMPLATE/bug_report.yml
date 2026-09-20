@@ -1,0 +1,94 @@
+name: Bug report
+description: Something behaves differently from what the documentation says.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues are for **bugs** — a difference between what the docs say and what
+        happened. For setup help, client configuration, or "is this supposed to
+        work like X?", please use
+        [Discussions](https://github.com/briardhq/tether/discussions) instead.
+
+        **Please don't report security bugs here** — email security@briard.io
+        instead, so it can be fixed before it is public.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you observed, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: >-
+        Steps, starting from a state someone else could get to. If you cannot
+        reproduce it reliably, say so and describe what you were doing — an
+        intermittent report is still useful, it is just triaged differently.
+    validations:
+      required: true
+
+  - type: textarea
+    id: report-card
+    attributes:
+      label: The status card
+      description: >-
+        `briard-tether status` — this answers most of the environment questions
+        in one go, including which adapter was identified and how the connection
+        has been behaving. The card is read-only and carries no network key.
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: adapter
+    attributes:
+      label: Adapter
+      placeholder: e.g. Sonoff ZBDongle-P, ConBee II, Home Assistant SkyConnect
+    validations:
+      required: true
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: Which client
+      options:
+        - zigbee2mqtt over mdns://
+        - zigbee2mqtt over tcp://
+        - ZHA, discovered
+        - ZHA, socket:// by hand
+        - Something else / none yet
+    validations:
+      required: true
+
+  - type: input
+    id: host-os
+    attributes:
+      label: OS of the machine the dongle is plugged into
+      placeholder: e.g. Debian 13, Ubuntu 24.04, NixOS 26.05, Windows 11
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >-
+        `journalctl -u briard-tether` is usually the right place to start, plus
+        the client's own log if it is the client that is unhappy. tether sends us
+        nothing, so we only ever see what you choose to put here.
+      render: shell
+
+  - type: checkboxes
+    id: shape
+    attributes:
+      label: Shape of the install
+      options:
+        - label: More than one adapter on this machine
+        - label: The client runs in a container or a VM
+        - label: The problem involves an unplug, a replug, or a client restart
+        - label: This was an existing Zigbee network moved onto tether

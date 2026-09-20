@@ -1,0 +1,201 @@
+# Per-commit gate: fast, hosted-runner-safe. Everything here runs on a stock runner in
+# under a couple of minutes.
+#
+# What is deliberately NOT here: the hardware spot-checks need a real dongle on a real USB bus,
+# and the client gates that drive a real zigbee2mqtt or a real Home Assistant need those clients
+# and a broker installed. Those run on the maintainer's own machine, which is where the sticks
+# are. The zigpy client gate below is the exception: its coordinator is an emulator on a pty, so
+# the client-gate tier is not hardware-bound as a class — only most of it is.
+#
+# Nor are the Windows unit tests, which have a workflow of their own — `windows.yml`, a button
+# rather than a gate. The Windows *seam* is guarded here per commit by the cross-compile step
+# below, which is the half of it a commit can break; running those tests is something a person
+# asks for. That file argues it.
+name: ci
+
+# Branches only, not tags: a tag runs release.yml, which calls this whole workflow as its gate
+# rather than trusting that the tagged commit happened to pass on its way in.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # the trailer gate below needs the pushed range, not a shallow tip
+
+      # No AI attribution trailers in commit messages. `Claude-Session:` in particular would
+      # leak a private session URL; `Co-Authored-By: Claude` goes with it. Mechanism over
+      # discipline — it catches a contributor's trailers, which no local config could. Scoped to
+      # the newly pushed commits on purpose: a full-history scan would need every author who ever
+      # touched the repo to have never used such a trailer.
+      - name: No AI attribution trailers (pushed commits only)
+        run: |
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          head="${{ github.sha }}"
+          # all-zeros = branch creation / no usable base; fall back to the tip commit
+          case "$base" in
+            ''|0000000000000000000000000000000000000000) range="-1 $head" ;;
+            *) git cat-file -e "$base^{commit}" 2>/dev/null && range="$base..$head" || range="-1 $head" ;;
+          esac
+          if git log $range --format='%B' | grep -nE 'Co-Authored-By: Claude|Claude-Session:'; then
+            echo "::error::commit message carries an AI attribution trailer; rewrite before pushing"
+            exit 1
+          fi
+          echo "no AI attribution trailers in $range"
+
+      # ⚠️ **No pointer at a document a reader of this repo cannot open.** The design contract,
+      # the tracker and the runbooks are kept privately, and a comment that cites one of them by
+      # name or by item id is worse than a comment with no pointer at all: it tells a stranger
+      # that the real explanation is somewhere they will never reach. The rule is that a comment
+      # must stand on its own, or point at ARCHITECTURE.md by section title, or name an invariant
+      # by number — all three of which resolve here.
+      #
+      # Whole-tree rather than a diff, because these leak back in by copy-and-paste from an old
+      # comment as readily as by a new one. It reads the index, so it sees exactly what a clone
+      # would get.
+      #
+      # ⚠️ The two exclusions are git pathspecs and belong to `ls-files`, not to `grep` — this
+      # file and the hook both quote the pattern, so they match themselves. And the verdict is
+      # the captured *output*, not an exit status: `xargs` reports 123 when any one of its
+      # `grep` batches found nothing, so on a tree this size a real hit in one batch would be
+      # masked by a clean batch beside it.
+      # ⚠️ **A section sign is guilty until proven RFC.** Private documents are cited by section
+      # (`§7`) or by item id (`T.12`) rather than by name, so these two patterns catch both; the
+      # filter below spares the one legitimate use of `§` — an RFC citation, which a reader can
+      # look up.
+      - name: No pointers into the private documents
+        run: |
+          private='\bT\.[0-9]+[a-z]?\b'
+          # ⚠️ The file list is NOT captured in a variable: command substitution strips NUL, so
+          # `$(git ls-files -z)` collapses every path into one unopenable name and the grep then
+          # fails with an error the `if` reads as "clean". The pipeline runs twice instead.
+          ls() { git ls-files -z -- ':!.github/workflows/ci.yml' ':!scripts/hooks/pre-commit'; }
+          leaked=$(ls | xargs -0 grep -nIE "$private" || true)
+          sections=$(ls | xargs -0 grep -nIE '§' | grep -vE 'RFC ?[0-9]+ ?§' || true)
+          if [ -n "$leaked$sections" ]; then
+            [ -n "$leaked" ] && echo "$leaked"
+            [ -n "$sections" ] && echo "$sections"
+            echo "::error::a pointer into the private documents reached the public tree; see the note above this step"
+            exit 1
+          fi
+          echo "no pointers into the private documents"
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # gofmt first and short-circuiting, so an unformatted file fails fast — the same order
+      # scripts/hooks/pre-commit assumes. Running it through `nix develop` means a broken
+      # flake.nix or devShell fails right here, which is why there is no separate flake job.
+      #
+      # -race is not optional here. The product is a concurrent pipe: one long-lived device
+      # reader, one reader per client session, and a takeover that closes one and waits for it
+      # while another arrives. A data race in that is exactly the bug class that shows up as
+      # "it works until it doesn't", which is the failure the whole project exists to stop
+      # being. It costs a few seconds at this size and needs no separate job.
+      - name: Go checks (fmt, vet, test with the race detector)
+        run: nix develop --command bash -c 'test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...'
+
+      # The three tests that put a real advert on a real multicast group. They are opt-in and do
+      # not run in `go test ./...`, for a reason that is nobody's fault but ours:
+      # `TestTheAdvertLeadsAClientToTheRadio` publishes the service type out of ZHA's own
+      # manifest, so running it on a developer's home network offers their real Home Assistant a
+      # discovery card for a coordinator that lives four seconds. A guard that only asks whether
+      # the group can be bound skips in sandboxes, which have nothing to pollute, and runs where
+      # it can do harm.
+      #
+      # ⚠️ **They must keep running somewhere per commit**, which is here: this is the only check
+      # that the advert reaches a wire at all, and a check nobody runs is worse than none. The
+      # script builds a network namespace with a veth pair in it — a real segment with nothing
+      # else on it — and needs no root to do it.
+      #
+      # ⚠️ **Not in a namespace here, and the runner is why.** `unshare --user` needs
+      # unprivileged user namespaces and this runner refuses them — `write failed
+      # /proc/self/uid_map: Operation not permitted`. The namespace exists to keep an advert off
+      # *somebody's* network; a hosted runner is a throwaway VM with nobody's Home Assistant on
+      # it, so its own network is already the private segment the script would have built. The
+      # opt-out is explicit rather than a silent fallback, because the thing being asserted —
+      # "nothing here is listening for a coordinator" — is true of this machine and false of a
+      # laptop.
+      - name: The wire tests
+        env:
+          TETHER_WIRE_HOST_NETWORK: "1"
+        run: nix develop --command ./scripts/wire-tests.sh
+
+      # Linux is the first target and Windows stays possible: no udev or systemd assumptions
+      # below the packaging layer, no POSIX-only syscalls outside the device layer. That is only
+      # a real constraint while something re-checks it, and a cross-compile is what sees a shared
+      # file quietly growing a Linux-only symbol. `vet` is the load-bearing half — it type-checks
+      # _test.go files, which a plain build does not. Nothing is executed: a Windows test binary
+      # cannot run on this runner, and the decay this catches is a compile error, not a
+      # behavioural one.
+      #
+      # `CGO_ENABLED=0` is explicit rather than inherited. Go leaves cgo *on* for a cross-compile
+      # when the host has a C compiler, so without it this step would pass only because Windows
+      # `net` does not want cgo while Linux `net` does — luck, not intent, and the arm64 step
+      # below trips over exactly that. Saying it here makes both steps mean the same thing.
+      - name: Go builds for Windows (keeping the platform seam honest)
+        run: nix develop --command bash -c 'CGO_ENABLED=0 GOOS=windows go build -o "$(mktemp -d)/" ./... && CGO_ENABLED=0 GOOS=windows go vet ./...'
+
+      # arm64 is a deployment target rather than a seam: the machine a dongle is plugged into is
+      # as likely to be a Raspberry Pi or an ARM mini-PC as an x86 NUC, and a release that cannot
+      # be built for it should be found out here rather than at packaging time.
+      #
+      # It catches less than the Windows step — the build tags are identical to amd64, so the
+      # same files compile — but what it does catch is real: an `x/sys/unix` constant or ioctl
+      # that is not defined for this architecture, which is a live risk in a repo whose device
+      # layer sets termios bits by hand. Nothing is executed; a runner cannot run an arm64
+      # binary, and the decay this catches is a compile error.
+      - name: Go builds for linux/arm64 (a machine a dongle actually plugs into)
+        run: nix develop --command bash -c 'CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o "$(mktemp -d)/" ./... && CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go vet ./...'
+
+      # 32-bit ARM, for the older Raspberry Pis still running a 32-bit OS. The same compile-only
+      # check as the step above, for the same reason: termios and ioctl types differ in width
+      # here, and that is a compile error nothing else would surface.
+      - name: Go builds for linux/armv7 (a 32-bit Raspberry Pi)
+        run: nix develop --command bash -c 'CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -o "$(mktemp -d)/" ./... && CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go vet ./...'
+
+      # The nix package, which is how a source install builds. It guards two things nothing else here
+      # does. **`vendorHash`** goes stale the moment go.mod or go.sum changes, and a package
+      # output that no longer builds is found by whoever bumps a dependency — at the worst moment
+      # — rather than by the commit that broke it. And **static**: `CGO_ENABLED=0` lives in the
+      # package, so this is the only step that proves the single-binary promise, and the grep is
+      # the assertion — without cgo off, the same tree links against the builder's own `ld-linux`
+      # and the word here would read "dynamically".
+      - name: The package output (one static binary)
+        run: |
+          nix build .#default
+          file -L result/bin/briard-tether
+          file -L result/bin/briard-tether | grep -q 'statically linked'
+
+      # The one part of the client-gate tier that is not hardware-bound: a real zigpy client —
+      # the stack ZHA is built on — driving zigpy-znp's own emulator through a real tether, over
+      # a real pty and a real socket. It reads the network back, drops the connection, reconnects
+      # against the same live tether and asserts the radio answered the second client exactly as
+      # it answered the first (INV 1).
+      #
+      # It belongs here because it costs almost nothing: ~4s, no dongle, no root, and the python
+      # it needs was already built by the `nix develop` above, so it adds nothing to the nix bill
+      # either. Everything upstream of it is ours proving itself against itself; this is the first
+      # step where somebody else's protocol expectations are the judge.
+      #
+      # The emulator and its captured NVRAM come from `nixpkgs#python3Packages.zigpy-znp.src`,
+      # pinned by flake.lock like everything else — not from pip, whose sdist ships no conftest.py
+      # and no nvram/ at all.
+      #
+      # A failure prints all three processes' output, because "which of the three broke" is
+      # unanswerable from the client's side: a client that cannot reach a coordinator says the
+      # same thing whether tether corrupted a byte, the emulator died, or nothing opened the port.
+      - name: The zigpy client gate (an emulated coordinator, no dongle, no root)
+        run: nix develop --command bash -c 'go build -o briard-tether ./cmd/briard-tether && python3 tests/run_gate.py'

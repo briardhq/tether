@@ -1,0 +1,196 @@
+# Not a gate — a button. `workflow_dispatch` only, so nothing here can go red in the commit loop.
+# It runs the portable unit tests on Windows: cross-built on Linux and executed over there, with no
+# Go toolchain on the Windows side.
+#
+# Why it exists: running these by hand needs a Windows machine, and a contributor may not have one.
+# This gives them the same run on a hosted box.
+#
+# What it deliberately cannot do is anything needing a COM port, a real client, or a dongle. A
+# hosted runner has none of them, so a real Windows machine stays the authority for the tests that
+# find the real bugs — those are driven from `tests/rig.py`, which says what such a machine needs.
+# The compile side of "keep Windows possible" is not this file's job either: `GOOS=windows go vet
+# ./...` in ci.yml already catches a portable file growing a Linux-only symbol, per commit, and
+# type-checks `_test.go` while it is there.
+#
+# There is no `schedule:` on purpose. A monthly run is a standing test by another name: it lands in
+# nobody's inbox when it breaks, and what it would catch — Windows changing underneath us — the next
+# real run on a real machine catches anyway, on hardware that can also reach a COM port.
+name: windows units (on demand)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # Built through the same devShell as everything else, so this run uses the toolchain
+      # flake.lock pins. That is the whole reason the binaries are cross-built here and carried
+      # over rather than running `go test` on the Windows box: nix does not run there, and
+      # `actions/setup-go` would be a second place the Go version is written down, free to drift
+      # from the one the gate and the pre-commit hook use.
+      #
+      # `CGO_ENABLED=0` for the reason ci.yml gives: Go leaves cgo on for a cross-compile wherever
+      # the host has a C compiler, and a cross-compile that needs one is not a cross-compile.
+      #
+      # Six binaries, ~34 MB — one per package with portable tests. `internal/device` contributes
+      # none and says `[no test files]`: every test it has is `//go:build linux` and
+      # pty-based, which is the largest thing this button cannot reach.
+      - name: Cross-build the portable test binaries
+        run: |
+          mkdir -p staging
+          nix develop --command bash -c 'CGO_ENABLED=0 GOOS=windows go test -c -o staging/ ./...'
+          ls -l staging
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-binaries
+          path: staging/*.test.exe
+          retention-days: 1
+
+  run:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-test-binaries
+          path: tether-tests
+
+      # Each binary through `cmd /c`, which is also how these are run by hand — so that the
+      # button and the hand-run procedure are the same command rather than two that drift. In
+      # PowerShell `& $exe -test.v` passes `-test` and nothing else, a native program's stderr comes
+      # back wrapped in error records (which is where tether's own log lines are), and `Tee-Object`
+      # writes UTF-16.
+      #
+      # `-test.timeout` is an artefact of running a compiled binary rather than `go test`: `go
+      # test` injects a 10m timeout, a raw test binary has none at all, so a hung test would sit
+      # here until the job's own clock ran out with no stack dump to read.
+      #
+      # `-test.v` is not decoration: a quiet pass cannot be told from a pass with the interesting
+      # test skipped, which the verdict below is entirely about.
+      #
+      # `TETHER_WIRE_TESTS` is the opt-in the two wire tests read (`requireMulticast`): without it
+      # they skip, and this run would then report two unexpected skips and a failure that did not
+      # happen. It is set here on the same grounds ci.yml sets `TETHER_WIRE_HOST_NETWORK` — a
+      # hosted runner is a throwaway VM with nobody's Home Assistant on it, so announcing on its
+      # own network costs nothing — and it is this variable rather than that one because there is
+      # no `scripts/wire-tests.sh` in a PowerShell step to translate it: the binaries are run
+      # directly, and this is what they read.
+      - name: Run them and read the result
+        working-directory: tether-tests
+        shell: pwsh
+        env:
+          TETHER_WIRE_TESTS: "1"
+        run: |
+          $binaries = Get-ChildItem *.test.exe | Sort-Object Name
+          if ($binaries.Count -eq 0) { throw "the artifact carried no test binaries" }
+
+          $exits = @{}
+          $started = Get-Date
+          foreach ($b in $binaries) {
+            cmd /c "$($b.Name) -test.v -test.timeout=10m > $($b.BaseName).log 2>&1"
+            $exits[$b.BaseName] = $LASTEXITCODE
+            "{0}: exit {1}" -f $b.Name, $LASTEXITCODE
+          }
+          $elapsed = ((Get-Date) - $started).TotalSeconds
+
+          # Top-level verdicts only: a subtest's `--- FAIL` is indented, and its parent fails with it.
+          $results = @()
+          foreach ($log in Get-ChildItem *.log | Sort-Object Name) {
+            foreach ($m in Select-String -Path $log.FullName -Pattern '^--- (PASS|FAIL|SKIP): (\S+)') {
+              $results += [pscustomobject]@{
+                Binary  = $log.BaseName
+                Verdict = $m.Matches[0].Groups[1].Value
+                Name    = $m.Matches[0].Groups[2].Value
+              }
+            }
+          }
+          $failed  = @($results | Where-Object Verdict -eq 'FAIL')
+          $skipped = @($results | Where-Object Verdict -eq 'SKIP')
+          $passed  = @($results | Where-Object Verdict -eq 'PASS')
+
+          # A binary that dies before it can report — a panic in TestMain, a missing DLL — leaves a
+          # non-zero exit and no FAIL line, which every count above would read as a clean run.
+          foreach ($b in $binaries) {
+            $base = $b.BaseName
+            if ($exits[$base] -ne 0 -and -not @($failed | Where-Object Binary -eq $base)) {
+              $failed += [pscustomobject]@{
+                Binary  = $base
+                Verdict = 'FAIL'
+                Name    = "(exited $($exits[$base]) reporting no failure)"
+              }
+            }
+          }
+
+          # The two known deviations on Windows. `TestAdvert…` is red on
+          # purpose — a defect in the mDNS library's browser, with the goodbye captured on the wire
+          # — and the drift check wants a copy of zigbee-herdsman that a hosted runner does not have.
+          $expectedFail = @('TestAdvertReachesTheWireAndIsWithdrawn')
+          $expectedSkip = @('TestDriftAgainstHerdsmanAdapterTable')
+
+          # Anything else skipping is red, not green. The tests likeliest to skip on a hosted box are
+          # the two that bind `224.0.0.251:5353`, and mDNS on the Windows network stack is most of
+          # what running over here is for — a run that quietly left them out has proved little and
+          # must not report a tick.
+          $unexpectedFail = @($failed  | Where-Object { $expectedFail -notcontains $_.Name })
+          $unexpectedSkip = @($skipped | Where-Object { $expectedSkip -notcontains $_.Name })
+
+          # And an expectation that stops holding is a result too: the library fixed upstream, or a
+          # skip that has started running. Reported, not fatal — neither is a reason to fail a run.
+          $absentFail = @($expectedFail | Where-Object { $n = $_; -not @($failed  | Where-Object Name -eq $n) })
+          $absentSkip = @($expectedSkip | Where-Object { $n = $_; -not @($skipped | Where-Object Name -eq $n) })
+
+          $out = @()
+          $out += "## Portable unit tests on Windows"
+          $out += ""
+          $out += "$($binaries.Count) binaries, $($results.Count) top-level tests, $([int]$elapsed) s wall clock: **$($passed.Count) passed, $($failed.Count) failed, $($skipped.Count) skipped**."
+          $out += "Runner image: ``$env:RUNNER_OS`` / ``$env:ImageOS``. A real Windows machine on a real LAN is the reference, so counts need not match a runner exactly."
+          $out += ""
+          $out += "| binary | tests | exit |"
+          $out += "| --- | --- | --- |"
+          foreach ($b in $binaries) {
+            $n = @($results | Where-Object Binary -eq $b.BaseName).Count
+            $out += "| ``$($b.Name)`` | $n | $($exits[$b.BaseName]) |"
+          }
+          $out += ""
+          foreach ($f in $failed)  { $out += "- **FAIL** ``$($f.Binary)`` $($f.Name)" + $(if ($expectedFail -contains $f.Name) { " _(expected)_" }) }
+          foreach ($s in $skipped) { $out += "- **SKIP** ``$($s.Binary)`` $($s.Name)" + $(if ($expectedSkip -contains $s.Name) { " _(expected)_" }) }
+          foreach ($n in $absentFail) { $out += "- note: ``$n`` was expected to fail here and did not — worth a look before the expectation is dropped." }
+          foreach ($n in $absentSkip) { $out += "- note: ``$n`` was expected to skip here and did not — it found what it needed." }
+          $out | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+          $out
+
+          if ($unexpectedFail.Count -or $unexpectedSkip.Count) {
+            foreach ($f in $unexpectedFail) { "::error::unexpected failure on Windows: $($f.Binary) $($f.Name)" }
+            foreach ($s in $unexpectedSkip) { "::error::unexpected skip on Windows (a skip is not a pass here): $($s.Binary) $($s.Name)" }
+            exit 1
+          }
+
+          # Explicit, and load-bearing: the runner appends `exit $LASTEXITCODE` to a pwsh step, and
+          # by here that is whatever the *last* binary returned. The expected failure lives in
+          # `discovery.test.exe` today, which is not last — so without this line the step would be
+          # green by alphabet and red the day a package sorting after it fails on purpose.
+          exit 0
+
+      # The logs are the run: `-test.v` output plus tether's own log lines, which is where a test
+      # says what it did. Kept whichever way the step above went, because a red run is the one whose
+      # output somebody wants.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-test-logs
+          path: tether-tests/*.log
+          retention-days: 14

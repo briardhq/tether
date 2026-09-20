@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Two checks, both of which CI repeats -- this is where they are cheap.
+#
+# 1. gofmt the staged Go files. CI runs
+#      test -z "$(gofmt -l .)" && go vet ./... && go test ./...
+#    and short-circuits at the gofmt gate, so an unformatted file never
+#    reaches vet/test -- it just fails the whole job.
+#
+# 2. No pointer at a document a reader of this repo cannot open. The design
+#    contract, the tracker and the runbooks are kept privately, and a comment
+#    citing one of them by name or by item id is worse than a comment with no
+#    pointer at all: it tells a stranger that the real explanation is somewhere
+#    they will never reach. A comment must stand on its own, or point at
+#    ARCHITECTURE.md by section title, or name an invariant by number.
+#
+# Scope: only staged files, so the hook is instant and never trips on unrelated
+# in-flight work elsewhere in the tree.
+#
+# Installed into .git/hooks/pre-commit by the flake devShell (nix develop).
+set -euo pipefail
+
+# Added/Copied/Modified staged files, excluding deletions.
+mapfile -t staged < <(git diff --cached --name-only --diff-filter=ACM -z | tr '\0' '\n')
+
+[ ${#staged[@]} -eq 0 ] && exit 0
+
+mapfile -t staged_go < <(printf '%s\n' "${staged[@]}" | grep '\.go$' || true)
+
+if [ ${#staged_go[@]} -gt 0 ]; then
+  unformatted=$(gofmt -l "${staged_go[@]}")
+  if [ -n "$unformatted" ]; then
+    echo "pre-commit: these staged files are not gofmt-clean:" >&2
+    echo "$unformatted" | sed 's/^/  /' >&2
+    echo "fix with:  gofmt -w${unformatted:+ }$(echo "$unformatted" | tr '\n' ' ')" >&2
+    echo "  (then re-stage)" >&2
+    exit 1
+  fi
+fi
+
+# This file and the CI workflow are excluded, and it is not a loophole: they are the two places
+# that have to spell the forbidden patterns out in order to look for them. The exclusion list is
+# the same on both sides -- a file added here without being added there fails in CI instead, which
+# is the right way round.
+mapfile -t staged_checkable < <(printf '%s\n' "${staged[@]}" \
+  | grep -vE '^(scripts/hooks/pre-commit|\.github/workflows/ci\.yml)$' || true)
+
+if [ ${#staged_checkable[@]} -gt 0 ]; then
+  private='\bT\.[0-9]+[a-z]?\b'
+  leaked=$(grep -nIE "$private" -- "${staged_checkable[@]}" 2>/dev/null || true)
+  # A section sign is guilty until proven RFC: `§7` cites a document a reader cannot open as
+  # surely as naming it would.
+  leaked="$leaked"$'\n'$(grep -nIE '§' -- "${staged_checkable[@]}" 2>/dev/null | grep -vE 'RFC ?[0-9]+ ?§' || true)
+  if [ -n "${leaked//[[:space:]]/}" ]; then
+    echo "pre-commit: a pointer into the private documents is staged:" >&2
+    echo "$leaked" | sed 's/^/  /' >&2
+    echo "this repo is public. Say the thing itself, point at a section of" >&2
+    echo "ARCHITECTURE.md by title, or name an invariant by number." >&2
+    exit 1
+  fi
+fi

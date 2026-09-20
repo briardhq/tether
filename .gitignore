@@ -1,0 +1,28 @@
+# Go
+/bin/
+*.test
+*.out
+# stray Go build artifact from an ad-hoc `go build` (real builds go to the nix package / a
+# temp dir), named after the cmd dir.
+/briard-tether
+/briard-tether.exe
+/cmd/briard-tether/briard-tether
+/cmd/briard-tether/briard-tether.exe
+
+# Nix
+/result
+/result-*
+/.direnv/
+
+# editor / OS
+*.swp
+.DS_Store
+
+# secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Python bytecode from the test harnesses in tests/. Nothing here is shipped.
+__pycache__/
+*.pyc
