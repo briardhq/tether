@@ -1,50 +1,38 @@
 # briard-tether
 
-**Bring a USB Zigbee coordinator to Home Assistant's ZHA or to zigbee2mqtt over the network** —
-reliably, with no client-side plugin and no cloud.
+**Serve a USB Zigbee coordinator to Home Assistant's ZHA or to zigbee2mqtt over the network.** Run
+it on the machine the dongle is plugged into; the client can live anywhere, including a VM. Built
+by the [briard](https://briard.io) project, and works standalone.
 
-Run it on the machine the dongle is plugged into. It serves the coordinator on a TCP port and
-advertises it over mDNS, so ZHA discovers it and zigbee2mqtt reaches it with `mdns://` or `tcp://`.
-The dongle can live where the RF is best, and the client wherever you want — including a VM, which
-cannot own a USB device.
-
-It is built by the [briard](https://briard.io) project, which uses it to reach every radio, and it
-works standalone.
-
-> **Status: beta.** Built and tested against real zigbee2mqtt, real Home Assistant and real
-> hardware, but not yet on many machines we don't own. Please
-> [tell us what broke](https://github.com/briardhq/tether/issues).
+> **Status: beta.** Tested against real zigbee2mqtt, Home Assistant and hardware, but not yet on
+> many machines we don't own. Please [tell us what broke](https://github.com/briardhq/tether/issues).
 
 ## Features
 
-A generic serial-to-network bridge like ser2net can carry a Zigbee coordinator, but it leaves you
-to assemble the setup by hand and knows nothing about what can go wrong. tether is built for
-exactly this one job:
+A generic bridge like ser2net can carry a coordinator, but you assemble the setup by hand and it
+knows nothing about Zigbee. tether is built for this one job:
 
-- **Zero configuration.** tether detects the adapter, recognises the model (using the same adapter
-  table as zigbee2mqtt), and opens it with the right baud rate and flow control. The device path
-  it uses survives reboots and replugging.
-- **Automatic discovery.** It advertises the coordinator over mDNS, so Home Assistant offers it
-  with no typing and zigbee2mqtt finds it with `mdns://`, even after the address changes.
-- **The radio is never reset by a client.** The adapter stays open while clients come and go, and
-  connecting or disconnecting never toggles the lines that reset it. Your Zigbee network keeps
-  running while the client restarts.
-- **One client at a time, and a new one wins.** A client that crashed without closing its
-  connection cannot lock out its own restart: the new connection takes over and the stale one is
-  closed.
-- **Fails loudly, never silently.** If the dongle is unplugged, the client's connection is closed
-  at once, so it recovers instead of hanging, and tether reopens the dongle when it comes back.
-  TCP keepalives catch connections that died without a word.
-- **Protected from USB power saving.** It stops the operating system from suspending the dongle,
-  a common cause of setups that work for a while and then quietly die.
-- **Tells you what is happening.** `briard-tether status` shows the adapter, the client and the
-  Zigbee traffic: frames each way, radio resets and why, corrupted bytes. When something breaks,
-  it can show whether the fault is the network or the dongle.
-- **Tested against the real clients.** The test suite drives real zigbee2mqtt, real Home Assistant
-  and zigpy through tether against an emulated coordinator. What only hardware can show, such as
-  the reset lines and unplugging, is tested by hand on real dongles.
-- **Installs itself.** One static binary for Linux (x86, 64-bit and 32-bit Raspberry Pi) and
-  Windows. `install` sets it up as a service that starts at boot. No client-side plugin.
+- **Zero configuration.** Detects the adapter, recognises the model (zigbee2mqtt's adapter table)
+  and applies the right baud rate and flow control, on a device path that survives replugging.
+- **Automatic discovery.** Advertised over mDNS: Home Assistant offers it by itself, and
+  zigbee2mqtt finds it with `mdns://` even after an address change.
+- **The radio is never reset by a client.** The adapter stays open while clients come and go, so
+  the Zigbee network keeps running through a client restart.
+- **One client, and a new one wins.** A crashed client's stale connection cannot lock out its
+  restart: the new connection takes over.
+- **Fails loudly.** On unplug the client's connection closes at once, so it recovers instead of
+  hanging, and tether reopens the dongle when it returns.
+- **Liveness probe.** While no client is connected, tether pings the radio (TI/ZNP sticks), so a
+  wedged dongle is noticed rather than discovered by the next client.
+- **No USB power saving.** Keeps the OS from suspending the dongle, a classic cause of setups that
+  die after a while.
+- **Zigbee-aware status.** `briard-tether status` shows the adapter, the client and the traffic:
+  frames each way, radio resets and why, corrupted bytes — enough to tell a network fault from a
+  dongle fault.
+- **Tested against the real clients.** zigbee2mqtt, Home Assistant and zigpy run through tether
+  against an emulated coordinator; the hardware-only parts are tested by hand on real dongles.
+- **Installs itself.** One static binary for Linux (x86, Raspberry Pi 64- and 32-bit) and Windows;
+  `install` sets up a service that starts at boot.
 
 ## Install
 
