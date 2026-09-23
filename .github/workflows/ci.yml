@@ -199,3 +199,28 @@ jobs:
       # same thing whether tether corrupted a byte, the emulator died, or nothing opened the port.
       - name: The zigpy client gate (an emulated coordinator, no dongle, no root)
         run: nix develop --command bash -c 'go build -o briard-tether ./cmd/briard-tether && python3 tests/run_gate.py'
+
+  # The tests run natively on arm64, the architecture a Raspberry Pi or an ARM mini-PC runs.
+  # The cross-compile step above proves the code builds there; this proves it passes there,
+  # including the pty tests against a real arm64 kernel and the race detector on ARM's weaker
+  # memory ordering, and it builds the nix package natively rather than under emulation. The
+  # wire tests and client gates stay on x86 only: they test tether's logic, not the
+  # architecture. There is no 32-bit counterpart, because GitHub's ARM runners cannot execute
+  # armv7 binaries, so armv7 stays compile-only.
+  arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Go tests with the race detector, on arm64
+        run: nix develop --command bash -c 'uname -m && go test -race ./...'
+      - name: The package output, built natively (one static aarch64 binary)
+        run: |
+          nix build .#default
+          file -L result/bin/briard-tether
+          file -L result/bin/briard-tether | grep -q 'ARM aarch64, .*statically linked'
+          ./result/bin/briard-tether version

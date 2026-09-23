@@ -89,7 +89,7 @@ an issue first.
 - **Name things for the role, not the mechanism**, using the standard term.
 - **Linux first, Windows stays possible.** No udev or systemd assumptions below packaging, no
   POSIX-only syscalls outside `internal/device`. CI builds for Windows, linux/arm64 and
-  linux/armv7 on every commit.
+  linux/armv7 on every commit, and runs the tests natively on arm64.
 - **Comments describe current state** — what the code does and why — never "was", "until" or
   "now". History belongs in commit messages.
 
