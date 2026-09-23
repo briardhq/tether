@@ -292,8 +292,13 @@ func ago(now, then time.Time) string {
 func renderFrames(out io.Writer, card management.Card) {
 	f := card.Frames
 	if f == nil {
-		// Not the same as all-zero, and must not read like it.
-		fmt.Fprintf(out, "frames      not counted for %s radios\n", card.RadioType)
+		// Not the same as all-zero, and must not read like it. Before the adapter is identified
+		// there is no radio type to name, and which radios get counted is not yet known.
+		if card.RadioType == "" {
+			fmt.Fprintf(out, "frames      not counted until the radio is identified\n")
+		} else {
+			fmt.Fprintf(out, "frames      not counted for %s radios\n", card.RadioType)
+		}
 		return
 	}
 	// Protocol terms, not descriptions: whoever reads this line is debugging ZNP and AREQ/SRSP

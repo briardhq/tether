@@ -203,6 +203,26 @@ func TestRenderDistinguishesUnprobedFromFailed(t *testing.T) {
 	}
 }
 
+// The frames line names the radio type when it says why nothing is counted, and before the
+// adapter is identified there is no type to name — so that case needs its own words rather than
+// a sentence with a hole in it.
+func TestRenderFramesBeforeAndAfterTheRadioIsIdentified(t *testing.T) {
+	now := time.Now()
+	for _, tc := range []struct{ radio, want string }{
+		{"", "frames      not counted until the radio is identified\n"},
+		{"ezsp", "frames      not counted for ezsp radios\n"},
+	} {
+		var out bytes.Buffer
+		render(&out, management.Card{StartedAt: now, Now: now, RadioType: tc.radio})
+		if !strings.Contains(out.String(), tc.want) {
+			t.Errorf("radio %q: want the line %q, the card was:\n%s", tc.radio, tc.want, out.String())
+		}
+		if strings.Contains(out.String(), "for  radios") {
+			t.Errorf("radio %q: the frames line has an empty radio type in it:\n%s", tc.radio, out.String())
+		}
+	}
+}
+
 // A missing adapter has to be the loudest thing on the card, because an outage is when somebody
 // runs this. The failure guarded against is the quiet one: a card that reports traffic and probe
 // results as usual while there is no dongle plugged in at all.
