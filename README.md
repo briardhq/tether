@@ -15,6 +15,37 @@ works standalone.
 > hardware, but not yet on many machines we don't own. Please
 > [tell us what broke](https://github.com/briardhq/tether/issues).
 
+## Features
+
+A generic serial-to-network bridge like ser2net can carry a Zigbee coordinator, but it leaves you
+to assemble the setup by hand and knows nothing about what can go wrong. tether is built for
+exactly this one job:
+
+- **Zero configuration.** tether detects the adapter, recognises the model (using the same adapter
+  table as zigbee2mqtt), and opens it with the right baud rate and flow control. The device path
+  it uses survives reboots and replugging.
+- **Automatic discovery.** It advertises the coordinator over mDNS, so Home Assistant offers it
+  with no typing and zigbee2mqtt finds it with `mdns://`, even after the address changes.
+- **The radio is never reset by a client.** The adapter stays open while clients come and go, and
+  connecting or disconnecting never toggles the lines that reset it. Your Zigbee network keeps
+  running while the client restarts.
+- **One client at a time, and a new one wins.** A client that crashed without closing its
+  connection cannot lock out its own restart: the new connection takes over and the stale one is
+  closed.
+- **Fails loudly, never silently.** If the dongle is unplugged, the client's connection is closed
+  at once, so it recovers instead of hanging, and tether reopens the dongle when it comes back.
+  TCP keepalives catch connections that died without a word.
+- **Protected from USB power saving.** It stops the operating system from suspending the dongle,
+  a common cause of setups that work for a while and then quietly die.
+- **Tells you what is happening.** `briard-tether status` shows the adapter, the client and the
+  Zigbee traffic: frames each way, radio resets and why, corrupted bytes. When something breaks,
+  it can show whether the fault is the network or the dongle.
+- **Tested against the real clients.** The test suite drives real zigbee2mqtt, real Home Assistant
+  and zigpy through tether against an emulated coordinator. What only hardware can show, such as
+  the reset lines and unplugging, is tested by hand on real dongles.
+- **Installs itself.** One static binary for Linux (x86, 64-bit and 32-bit Raspberry Pi) and
+  Windows. `install` sets it up as a service that starts at boot. No client-side plugin.
+
 ## Install
 
 1. Plug in your Zigbee dongle.
