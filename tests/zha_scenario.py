@@ -49,6 +49,8 @@ And against a real stick, as yourself, with the tty group and nothing else:
         --unplug "sudo sh -c 'echo 0 > /sys/bus/usb/devices/<node>/authorized'" \\
         --replug "sudo sh -c 'echo 1 > /sys/bus/usb/devices/<node>/authorized'"
 
+A Silicon Labs stick adds `--radio ezsp`, which is what the entry must then name.
+
 ⚠️ **The radio must already carry a network**, which is why `--device` defaults to the *formed*
 fixture. This harness never forms one: the flow is always walked to `reuse_settings`, because
 resumption is the branch every start after day one takes, and a run that formed a new network
@@ -601,6 +603,7 @@ def adopt_the_card(ha: HomeAssistant, token: str, advertised: str,
 
 
 def check_entry(ha: HomeAssistant, token: str, flow: dict, address: str, expect_id: str | None,
+                expect_radio: str,
                 findings: list[str], what: str) -> str | None:
     """What the finished flow wrote: the entry, its radio type, its path, its unique id."""
     if flow.get("type") != "create_entry":
@@ -624,8 +627,9 @@ def check_entry(ha: HomeAssistant, token: str, flow: dict, address: str, expect_
     radio, path = written["data"]["radio_type"], written["data"]["device"]["path"]
     findings.append(
         f"the entry names the radio `{radio}` at `{path}`"
-        if radio == "znp" and path == address else
-        f"FAULT: the entry says radio `{radio}` at `{path}`, and we served `znp` at `{address}`")
+        if radio == expect_radio and path == address else
+        f"FAULT: the entry says radio `{radio}` at `{path}`, and we served `{expect_radio}` at "
+        f"`{address}`")
 
     unique_id = written.get("unique_id")
     findings.append(
@@ -832,7 +836,7 @@ def run(tether_binary: pathlib.Path, args: argparse.Namespace, workdir: pathlib.
             what = "the manual path"
         if flow is None:
             raise RuntimeError("there is no flow to finish; the fault above says why")
-        unique_id = check_entry(ha, token, flow, address, expect_id, findings, what)
+        unique_id = check_entry(ha, token, flow, address, expect_id, args.radio, findings, what)
         if unique_id is None:
             raise RuntimeError("ZHA never took the radio; everything after this would be a "
                                "question about an integration that is not there")
@@ -1201,8 +1205,8 @@ def run_migration(tether_binary: pathlib.Path, args: argparse.Namespace,
 
         print("\n── ZHA, pointed straight at the serial port ──", flush=True)
         flow = configure_by_hand(ha, token, str(link), findings)
-        entry_unique_id = check_entry(ha, token, flow, str(link), EMULATOR_UNIQUE_ID, findings,
-                                      "the install before tether")
+        entry_unique_id = check_entry(ha, token, flow, str(link), EMULATOR_UNIQUE_ID, "znp",
+                                      findings, "the install before tether")
         if entry_unique_id is None:
             raise RuntimeError("ZHA never took the radio; everything after this would be a "
                                "question about an integration that is not there")
@@ -1460,6 +1464,9 @@ def main() -> int:
                              "`read -p 'pull it, then Enter'`. Without it case (5) is skipped "
                              "and says so")
     parser.add_argument("--replug", help="with --unplug, the command that puts it back")
+    parser.add_argument("--radio", choices=("znp", "ezsp"), default="znp",
+                        help="with --stick, the radio type the entry must name — `ezsp` for a "
+                             "Silicon Labs stick. The emulator is znp")
     parser.add_argument("--migrate", action="store_true",
                         help="case (a): stage a ZHA that predates tether — configured "
                              "against the serial port, with two devices written into zigbee.db — "
@@ -1486,6 +1493,8 @@ def main() -> int:
     if args.unplug and not args.stick:
         parser.error("--unplug/--replug are for --stick: the emulator's plug event is a pty "
                      "closing, which this harness stages itself")
+    if args.radio != "znp" and not args.stick:
+        parser.error(f"there is no {args.radio} emulator: --radio {args.radio} needs --stick")
     if args.stick and args.device != parser.get_default("device"):
         parser.error("--stick and --device are two answers to the same question: one is a real "
                      "coordinator, the other picks an emulated one")
