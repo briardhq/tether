@@ -873,9 +873,14 @@ def run(tether_binary: pathlib.Path, args: argparse.Namespace, workdir: pathlib.
 
         # ─── the config, and what it says about the network ──────────────────────────────
         print(f"\n── the configuration.yaml, carrying the {args.network} network ──", flush=True)
+        # The network is read where Z2M will look: a `--radio tcp://host:port` may be another
+        # machine's tether, and reading 127.0.0.1 there would find nothing, or the wrong radio.
+        read_at = (f"socket://{args.radio[len('tcp://'):]}"
+                   if args.radio and args.radio.startswith("tcp://")
+                   else f"socket://127.0.0.1:{port}")
         # A --stick is as real a radio as one behind --port, and on the same air.
         advanced = advanced_block(args.network, bool(args.stick) or args.port is not None,
-                                  f"socket://127.0.0.1:{port}", ZIGPY_RADIO.get(args.adapter, "znp"))
+                                  read_at, ZIGPY_RADIO.get(args.adapter, "znp"))
         serial_port = args.radio or (
             "mdns://zigbee-coordinator" if args.discover else f"tcp://127.0.0.1:{port}")
         (data / "configuration.yaml").write_text(
