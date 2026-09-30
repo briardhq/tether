@@ -873,7 +873,8 @@ def run(tether_binary: pathlib.Path, args: argparse.Namespace, workdir: pathlib.
 
         # ─── the config, and what it says about the network ──────────────────────────────
         print(f"\n── the configuration.yaml, carrying the {args.network} network ──", flush=True)
-        advanced = advanced_block(args.network, args.port is not None,
+        # A --stick is as real a radio as one behind --port, and on the same air.
+        advanced = advanced_block(args.network, bool(args.stick) or args.port is not None,
                                   f"socket://127.0.0.1:{port}", ZIGPY_RADIO.get(args.adapter, "znp"))
         serial_port = args.radio or (
             "mdns://zigbee-coordinator" if args.discover else f"tcp://127.0.0.1:{port}")
