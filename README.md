@@ -64,6 +64,11 @@ knows nothing about Zigbee. tether is built for this one job:
    .\briard-tether-windows-amd64.exe install
    ```
 
+   If Windows answers *"An Application Control policy has blocked this file"*, Smart App Control
+   is on, and it runs only signed programs; tether is not code-signed. Turn it off in *Windows
+   Security → App & browser control → Smart App Control settings*. Windows does not let you turn
+   it back on without reinstalling.
+
 That's it. tether is now a service that starts at boot, finds your dongle, and advertises it on
 your network. There is nothing to configure.
 
