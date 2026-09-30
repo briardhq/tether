@@ -90,6 +90,9 @@
               # carries the whole test tree, and flake.lock pins it.
               (python3.withPackages (ps: [
                 ps.zigpy-znp
+                # The same gate for a Silicon Labs stick: bellows is zigpy's EZSP library, the
+                # one ZHA loads for `radio_type: ezsp`. Hardware only — it has no emulator.
+                ps.bellows
                 # Their suite's own test requirements (requirements_test.txt), so that
                 # tests/run_suite.py can run it unmodified. pytest-cov is left out: we want
                 # their assertions, not their coverage report.

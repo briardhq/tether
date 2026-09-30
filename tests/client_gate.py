@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# ⚠️ GPL-3, and it could carry no other licence: this file imports zigpy and zigpy-znp, both
-# GPL-3, and a module that imports a GPL-3 library is plausibly a derivative work.
+# ⚠️ GPL-3, and it could carry no other licence: this file imports zigpy, zigpy-znp and bellows,
+# all GPL-3, and a module that imports a GPL-3 library is plausibly a derivative work.
 # The Apache-2.0 tree around it is unaffected — mere aggregation — and nothing here is linked
 # into the briard-tether binary or appears in any release artifact. tether meets this code the
 # way it meets any client: over a TCP socket, at arm's length, as a separate process.
@@ -20,7 +20,7 @@ one write anywhere near it — `auto_form` — is not reachable from this file o
 What it proves, in the order it proves it:
 
   1. a real Zigbee stack completes its handshake through tether, which no scripted responder
-     can stand in for: the byte stream has to satisfy a real MT framer, not a table;
+     can stand in for: the byte stream has to satisfy a real framer (MT or ASH), not a table;
   2. the coordinator's own identity comes back intact — IEEE address, PAN, channel;
   3. INV 1 with a real client on the end of it. The client disconnects and reconnects against
      a live tether, and the radio answers the second client with exactly what it told the
@@ -31,6 +31,11 @@ Usage:
 
     briard-tether run -config <device: /dev/serial/by-id/usb-…, listen: 127.0.0.1:6638>
     python3 tests/client_gate.py 127.0.0.1:6638
+    python3 tests/client_gate.py --radio ezsp 127.0.0.1:6638   # a Silicon Labs stick
+
+`--radio` picks the zigpy radio library, the choice ZHA makes from the radio type: zigpy-znp for
+`znp`, bellows for `ezsp`. Both subclass zigpy's `ControllerApplication`, so everything this
+file does is the same code for either.
 
 Neither command wants root. The tty group is all tether needs for a real stick, and this side
 needs nothing at all — it is a TCP client.
@@ -45,8 +50,16 @@ import sys
 import zigpy.config
 from zigpy.exceptions import NetworkNotFormed
 
-import zigpy_znp.config as conf
-from zigpy_znp.zigbee.application import ControllerApplication
+from zigpy.application import ControllerApplication
+
+
+def application(radio: str) -> type[ControllerApplication]:
+    """The radio library ZHA would load for this radio type."""
+    if radio == "ezsp":
+        from bellows.zigbee.application import ControllerApplication as app
+    else:
+        from zigpy_znp.zigbee.application import ControllerApplication as app
+    return app
 
 
 def describe(app: ControllerApplication) -> dict[str, str]:
@@ -70,7 +83,7 @@ def describe(app: ControllerApplication) -> dict[str, str]:
     }
 
 
-async def interrogate(address: str) -> dict[str, str]:
+async def interrogate(address: str, radio: str) -> dict[str, str]:
     """Connect as ZHA would, read what the coordinator says about itself, and leave.
 
     A coordinator with no network formed is not an error here. zigpy reads the NIB first and
@@ -85,13 +98,13 @@ async def interrogate(address: str) -> dict[str, str]:
     # zigpy 1.4.1's schema is not idempotent: validating first turns the OTA providers into
     # objects, and the second pass calls .get() on them and raises AttributeError.
     config = {
-        conf.CONF_DEVICE: {conf.CONF_DEVICE_PATH: f"socket://{address}"},
+        zigpy.config.CONF_DEVICE: {zigpy.config.CONF_DEVICE_PATH: f"socket://{address}"},
         # Nothing here should write a backup file into the repo, and this run is not
         # anybody's backup.
         zigpy.config.CONF_NWK_BACKUP_ENABLED: False,
     }
 
-    app = ControllerApplication(config)
+    app = application(radio)(config)
     try:
         # `startup` is ZHA's boot, not a lighter stand-in for it: connect, read the network out
         # of NVRAM, and bring the coordinator up on it. `auto_form` is False and is never
@@ -105,9 +118,9 @@ async def interrogate(address: str) -> dict[str, str]:
         await app.shutdown(db=False)
 
 
-async def run(address: str) -> int:
-    print(f"connecting as a zigpy client to socket://{address}")
-    first = await interrogate(address)
+async def run(address: str, radio: str) -> int:
+    print(f"connecting as a zigpy {radio} client to socket://{address}")
+    first = await interrogate(address, radio)
     for key, value in first.items():
         print(f"  {key:16} {value}")
 
@@ -115,7 +128,7 @@ async def run(address: str) -> int:
     # must not have noticed. A transport that reset the coordinator would either fail the
     # second connection or answer it with different facts.
     print("disconnecting, then reconnecting against the same live tether")
-    second = await interrogate(address)
+    second = await interrogate(address, radio)
 
     if first != second:
         print("\nFAIL: the radio answered the second client differently", file=sys.stderr)
@@ -133,7 +146,7 @@ async def run(address: str) -> int:
     print("the radio answered the second client exactly as it answered the first (INV 1)")
 
     if "network" in first:
-        # Everything above is real and none of it is nothing: a genuine MT handshake through
+        # Everything above is real and none of it is nothing: a genuine handshake through
         # tether, twice, and NVRAM read through it, twice. But a blank coordinator can say
         # nothing about itself, so the strongest half of this test — that the *identity and
         # the network* survive a client restart — is not what just ran.
@@ -151,9 +164,13 @@ def main() -> int:
         "address",
         help="where tether is listening, host:port — the address a client would be given",
     )
+    parser.add_argument(
+        "--radio", choices=("znp", "ezsp"), default="znp",
+        help="the radio type tether serves, which picks the zigpy library that drives it",
+    )
     args = parser.parse_args()
     try:
-        return asyncio.run(run(args.address))
+        return asyncio.run(run(args.address, args.radio))
     except (OSError, asyncio.TimeoutError) as exc:
         print(f"\nFAIL: could not reach a coordinator through {args.address}: {exc}", file=sys.stderr)
         return 1
