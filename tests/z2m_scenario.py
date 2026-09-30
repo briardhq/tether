@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # ⚠️ GPL-3 by import, not only by association: the network read below drives
-# zigpy and zigpy-znp, both GPL-3, and a module that imports a GPL-3 library is plausibly a
+# zigpy and its radio libraries, all GPL-3, and a module that imports a GPL-3 library is plausibly a
 # derivative work. zigbee2mqtt itself is GPL-3 and is driven as a subprocess, at
 # arm's length, never linked. Nothing here reaches the briard-tether binary or any release
 # artifact.
@@ -86,7 +86,8 @@ emulator. It needs no privilege beyond the tty group, which is the whole reason 
 can be one command — a *root* tether cannot be put inside the unprivileged namespace `--discover`
 makes, so `--stick --discover` would otherwise be a four-part recipe done by hand. ⚠️ In the
 `shipped` arm it re-forms that stick's network: fine on a disposable test dongle and on
-nobody else's.
+nobody else's. A Silicon Labs stick is `--adapter ember`, and the `coordinator` arm then reads
+its network with bellows rather than zigpy-znp.
 
 `--unplug`/`--replug` are what let a real stick reach case (5), since nothing in a test process
 can pull a dongle by itself. The plug event a Linux host can stage without hands is a USB
@@ -122,8 +123,7 @@ sys.path.insert(0, str(HERE))
 
 import zigpy.config  # noqa: E402
 from zigpy.exceptions import NetworkNotFormed  # noqa: E402
-import zigpy_znp.config as conf  # noqa: E402
-from zigpy_znp.zigbee.application import ControllerApplication  # noqa: E402
+from client_gate import application  # noqa: E402
 
 import rig  # noqa: E402
 from run_gate import (  # noqa: E402
@@ -202,6 +202,10 @@ def broker_config(port: int) -> str:
 # in the first place, and is not the check this file makes.
 SILENT_ABOUT_FORMING = {"deconz"}
 
+# The zigpy radio library that reads the network off a coordinator, keyed by herdsman adapter:
+# a Silicon Labs stick is `ember` to Z2M and `ezsp` to zigpy. Anything absent reads as `znp`.
+ZIGPY_RADIO = {"ember": "ezsp", "ezsp": "ezsp"}
+
 # Channel 20 for the real-radio path: it is the one the test Sonoff already lived on, the
 # emulator's is 15 and Z2M's default is 11, so all three stay distinct and a mix-up fails
 # loudly.
@@ -235,7 +239,7 @@ def on_air_network() -> str:
             f"  channel: {ON_AIR_CHANNEL}\n")
 
 
-async def _interrogate(device: str) -> dict:
+async def _interrogate(device: str, radio: str) -> dict:
     """One zigpy client reading what herdsman is about to compare against.
 
     ⚠️ **It takes a zigpy device path rather than an address**, and the caller builds it:
@@ -249,8 +253,8 @@ async def _interrogate(device: str) -> dict:
     one — `auto_form` is never anything but False — so this is safe in front of a stick that is
     carrying somebody's devices.
     """
-    app = ControllerApplication({
-        conf.CONF_DEVICE: {conf.CONF_DEVICE_PATH: device},
+    app = application(radio)({
+        zigpy.config.CONF_DEVICE: {zigpy.config.CONF_DEVICE_PATH: device},
         # This run is not anybody's backup, and nothing here should write one into the repo.
         zigpy.config.CONF_NWK_BACKUP_ENABLED: False,
     })
@@ -278,7 +282,7 @@ async def _interrogate(device: str) -> dict:
         await app.shutdown(db=False)
 
 
-def read_network(device: str) -> dict:
+def read_network(device: str, radio: str = "znp") -> dict:
     """The network the coordinator is actually carrying, read before Z2M is told anything.
 
     This is the step that makes the `coordinator` arm mean what it says. Without it the config
@@ -286,7 +290,7 @@ def read_network(device: str) -> dict:
     which is a pass in the other arm and the failure this one exists to rule out.
     """
     try:
-        return asyncio.run(_interrogate(device))
+        return asyncio.run(_interrogate(device, radio))
     except NetworkNotFormed:
         # zigpy reads the NIB first and stops there, so a blank coordinator has nothing to say
         # about itself. Said here rather than left as a traceback, because it is the one
@@ -344,7 +348,7 @@ def z2m_config(broker: int, radio: str, adapter: str, advanced: str) -> str:
     return config + advanced
 
 
-def advanced_block(network: str, on_air: bool, device: str) -> str:
+def advanced_block(network: str, on_air: bool, device: str, radio: str) -> str:
     """Which network the config carries, which is what `--network` selects.
 
     ⚠️ **On a real radio the `shipped` arm cannot use the shipped defaults, and that is physics
@@ -359,7 +363,7 @@ def advanced_block(network: str, on_air: bool, device: str) -> str:
     """
     if network == "shipped":
         return on_air_network() if on_air else ""
-    net = read_network(device)
+    net = read_network(device, radio)
     print(f"  the coordinator carries pan 0x{net['pan_id']:04X} on channel {net['channel']}, "
           f"and the config will say so", flush=True)
     if net["ext_pan_id"] == DEFAULT_EXT_PAN_ID:
@@ -870,7 +874,7 @@ def run(tether_binary: pathlib.Path, args: argparse.Namespace, workdir: pathlib.
         # ─── the config, and what it says about the network ──────────────────────────────
         print(f"\n── the configuration.yaml, carrying the {args.network} network ──", flush=True)
         advanced = advanced_block(args.network, args.port is not None,
-                                  f"socket://127.0.0.1:{port}")
+                                  f"socket://127.0.0.1:{port}", ZIGPY_RADIO.get(args.adapter, "znp"))
         serial_port = args.radio or (
             "mdns://zigbee-coordinator" if args.discover else f"tcp://127.0.0.1:{port}")
         (data / "configuration.yaml").write_text(
