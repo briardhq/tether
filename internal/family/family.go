@@ -31,11 +31,10 @@ const (
 // them, and a flow-control mismatch surfaces as corruption under load — the failure hardest to
 // attribute, and the one this program exists to take off the table.
 //
-// So the rows are honest and the device layer makes them true. The serial library cannot enable
-// RTS/CTS — its mode struct has no field for it and its open hardcodes the flag off — so the
-// device layer sets CRTSCTS itself, through a descriptor it opens before the library and holds
-// for the life of the port. A row here describes the bridge rather than the firmware behind it,
-// which is why a radio override settles the radio type and leaves this alone.
+// So the rows are honest and the device layer makes them true: it asks the serial library for
+// RTS/CTS when it opens one of these, on Linux and Windows alike. A row here describes the bridge
+// rather than the firmware behind it, which is why a radio override settles the radio type and
+// leaves this alone.
 type Flow string
 
 const (
@@ -149,8 +148,8 @@ var table = []row{
 	{"10c4", "ea60", "dongle plus mg24", "Sonoff Dongle Plus MG24", Params{EZSP, 115200, FlowNone}},
 	{"10c4", "ea60", "dongle max mg24", "Sonoff Dongle Max MG24 (ZBDongle-M)", Params{EZSP, 115200, FlowNone}},
 	{"10c4", "ea60", "dongle lite mg21", "Sonoff Dongle Lite MG21", Params{EZSP, 115200, FlowNone}},
-	// ⚠️ The rows herdsman configures with rtscts on. They say so, and the device layer sets
-	// CRTSCTS itself rather than relying on the serial library, which cannot. Saying none here
+	// ⚠️ The rows herdsman configures with rtscts on. They say so, and the device layer opens
+	// them with RTS/CTS on. Saying none here
 	// instead would be the quieter lie: the stick would open, work at rest, and corrupt under
 	// load — which is the fault class hardest to attribute to a transport.
 	{"10c4", "ea60", "skyconnect", "Home Assistant SkyConnect", Params{EZSP, 115200, FlowRTSCTS}},

@@ -20,15 +20,13 @@ import (
 // the common one; ENODEV and ENXIO turn up depending on where in teardown the read landed.
 var goneErrors = []error{syscall.EIO, syscall.ENODEV, syscall.ENXIO}
 
-// openControl opens the tty for termios work and returns the descriptor to hold onto, with
-// HUPCL already cleared so that closing the port leaves DTR and RTS asserted rather than
-// dropping them (INV 7: one assert per plug event, not one per open).
+// openControl opens the tty for termios work and returns the descriptor, with HUPCL already
+// cleared so that closing the port leaves DTR and RTS asserted rather than dropping them
+// (INV 7: one assert per plug event, not one per open).
 //
-// It is deliberately its own open, before the serial library's, and — unlike an ordinary
-// pre-open — it is **kept**. That is what makes flow control reachable at all: the library
-// hardcodes RTS/CTS off inside its own open and exposes no descriptor, and it sets TIOCEXCL,
-// which locks out opens coming *after* it but cannot invalidate one that came before. termios
-// belongs to the tty rather than to a descriptor, so this one can still set CRTSCTS afterwards.
+// It is deliberately its own open, before the serial library's: the library exposes no
+// descriptor and sets TIOCEXCL, so nothing could reach termios after it. It is closed as soon as
+// the library has the tty open: what it set lives on the tty, not on the descriptor.
 //
 // Opening here raises the lines if they were low — the one edge we accept, reachable only
 // straight after enumeration, when the plug event has just power-cycled the radio anyway.
@@ -53,34 +51,7 @@ func openControl(path string) (int, error) {
 	return fd, nil
 }
 
-// applyFlowControl turns hardware RTS/CTS on for the families that need it, through the
-// descriptor openControl kept. It runs after the library has opened and applied its own
-// termios, because that ends with an unconditional "RTS/CTS off" which would otherwise undo us.
-//
-// ⚠️ Turning this on hands **RTS to the kernel** as a flow-control output. For these adapters
-// that is correct, and is what their own client does — but it is a documented exception to
-// INV 7 rather than a detail: RTS stops being a pinned management line on them, and therefore
-// cannot also be a reset line, which constrains the management verbs for exactly these rows.
-func applyFlowControl(fd int, on bool) error {
-	t, err := unix.IoctlGetTermios(fd, unix.TCGETS)
-	if err != nil {
-		return fmt.Errorf("reading termios: %w", classify(err, false))
-	}
-	if (t.Cflag&unix.CRTSCTS != 0) == on {
-		return nil
-	}
-	if on {
-		t.Cflag |= unix.CRTSCTS
-	} else {
-		t.Cflag &^= unix.CRTSCTS
-	}
-	if err := unix.IoctlSetTermios(fd, unix.TCSETS, t); err != nil {
-		return fmt.Errorf("setting RTS/CTS flow control: %w", classify(err, false))
-	}
-	return nil
-}
-
-// closeControl releases the retained descriptor. HUPCL is clear, so this drops no line.
+// closeControl releases that descriptor. HUPCL is clear, so this drops no line.
 func closeControl(fd int) {
 	if fd >= 0 {
 		unix.Close(fd)

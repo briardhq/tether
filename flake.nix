@@ -27,7 +27,7 @@
           # Keyed on what the code IMPORTS, not on what go.mod lists: buildGoModule vendors
           # reached packages only, so this moves when a new import first reaches a module
           # go.sum already carried -- with go.mod and go.sum both untouched.
-          vendorHash = "sha256-kBSIbly0lB4p0SiogsV8/TCgfxAyVuEHp0E5MY3n+4E=";
+          vendorHash = "sha256-Z8PudDUpkiN1BN48Z3nla8rlLyedeW98tAQ1K5zZiys=";
 
           # ⚠️ **Static, and explicitly so.** A plain `go build` does not produce one: Go leaves
           # cgo on wherever the host has a C compiler, so `net` pulls in `runtime/cgo` and the

@@ -152,10 +152,9 @@ human to pick its radio type and flow control.
 worn by ZNP sticks, EZSP sticks and unrelated hardware alike. An adapter the table cannot resolve is
 **refused by name**, never guessed at.
 
-Six rows need hardware RTS/CTS, which the serial library cannot enable. The device layer sets
-`CRTSCTS` itself through a descriptor opened *before* the library and held for the port's life
-(termios belongs to the tty, and the library's `TIOCEXCL` cannot lock out an earlier open) — no
-fork, no patch. Flow control is applied **before the drain**.
+Six rows need hardware RTS/CTS. The serial library applies it inside its own open — `CRTSCTS` on
+Linux, CTS output flow and RTS handshake in the DCB on Windows — so it is in force **before the
+drain**, and the first byte off the wire is under the same terms as every later one.
 
 ## Discovery
 
@@ -323,9 +322,13 @@ way to stop a tether there from outside its own console.
 
 Two, and a third needs an argument nobody has made yet.
 
-**Serial: `go.bug.st/serial`** (BSD-3, maintained by Arduino, one transitive requirement:
-`golang.org/x/sys`). Its `TIOCEXCL` on open keeps a second process off the dongle. The device layer
-adds what it lacks: hardware flow control (see the family table) and **clearing `HUPCL`**, which
+**Serial: `github.com/briardhq/go-serial`**, a fork of `go.bug.st/serial` (BSD-3, maintained by
+Arduino, one transitive requirement: `golang.org/x/sys`) that exists only to carry RTS/CTS flow
+control until upstream releases it: upstream v1.8.0, plus
+[bugst/go-serial#201](https://github.com/bugst/go-serial/pull/201), plus one commit that makes
+Windows drive RTS as the handshake line, under a renamed module path so that no `replace` is
+needed. When upstream releases the feature, the import goes back. Its `TIOCEXCL` on open keeps a
+second process off the dongle. The device layer adds what it lacks: **clearing `HUPCL`**, which
 INV 7 rests on — tether opens the tty itself first, clears the flag, then hands the path to the
 library configured to touch no modem bit. Its errors need translating: `PortError` does not
 `Unwrap`, and reports "closed by us" and "unplugged" alike, so the device layer tracks which it was.

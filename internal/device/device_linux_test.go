@@ -218,10 +218,9 @@ func TestClassifyDistinguishesDisappearanceFromEverythingElse(t *testing.T) {
 // that stops the TXT record being a lie (INV 8) and stops the load-dependent failure class — a
 // flow-control mismatch does not fail, it corrupts under load, so nothing else would notice.
 //
-// It is worth asserting precisely because of *how* it is done: the serial library hardcodes
-// RTS/CTS off inside its own open, and we reach around it through a descriptor opened first and
-// kept. If a future version of the library reapplies termios after that point, nothing would
-// break loudly — this test is what would catch it.
+// It is worth asserting because nothing else would notice: the library sets the flag inside its
+// own open, from a field on its mode struct, and a version that dropped or ignored that field
+// would still open every port and carry every byte. This test is what would catch it.
 func TestOpenAppliesHardwareFlowControlWhenTheFamilyNeedsIt(t *testing.T) {
 	for _, tc := range []struct {
 		name string

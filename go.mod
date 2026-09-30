@@ -3,8 +3,8 @@ module briard.io/tether
 go 1.25.0
 
 require (
+	github.com/briardhq/go-serial v1.8.0-briard.1
 	github.com/brutella/dnssd v1.2.14
-	go.bug.st/serial v1.8.0
 	golang.org/x/sys v0.43.0
 )
 

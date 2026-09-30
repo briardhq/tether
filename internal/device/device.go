@@ -11,7 +11,7 @@ import (
 	"log"
 	"sync/atomic"
 
-	"go.bug.st/serial"
+	"github.com/briardhq/go-serial"
 
 	"briard.io/tether/internal/family"
 )
@@ -43,9 +43,6 @@ type Adapter struct {
 type Port struct {
 	port serial.Port
 	path string
-	// control is the descriptor opened before the library's and held for the life of the
-	// port, because it is the only way to reach termios once the library has TIOCEXCL on it.
-	control int
 	// closed records that we asked for the close, so a PortClosed coming back from a
 	// blocked read is read as shutdown rather than as the dongle vanishing.
 	closed atomic.Bool
@@ -58,9 +55,8 @@ type Port struct {
 // params are the family table's row for this adapter. Data bits, parity and stop bits are 8N1
 // for every family in that table, so they are not parameters.
 //
-// Hardware RTS/CTS is applied for the families that need it, which the serial library cannot do
-// — so it is done around the library rather than through it, via a descriptor opened before it
-// and held for the life of the port. See openControl.
+// Hardware RTS/CTS is applied for the families that need it, by the library, inside its own open —
+// so the first byte off the wire is already under the terms every later byte is.
 func Open(path string, params family.Params) (*Port, error) {
 	// INV 7. The Linux tty layer raises DTR/RTS inside open(), and nothing can prevent that.
 	// What we can prevent is it happening more than once: with HUPCL clear the lines stay
@@ -81,20 +77,17 @@ func Open(path string, params family.Params) (*Port, error) {
 		// DTR=false, RTS=false would be worse, not better: it lowers them a few milliseconds
 		// after the kernel raised them, which is a second edge rather than none.
 		InitialStatusBits: nil,
+		// The kernel (or, on Windows, the driver) then drives RTS as the handshake line on these
+		// rows, which is the documented exception to INV 7.
+		RTSCTSFlowControl: params.Flow == family.FlowRTSCTS,
 	})
+	// The library holds the tty now, so this close is not the last one and cannot hang it up;
+	// HUPCL has done its work by being clear when the library opened.
+	closeControl(control)
 	if err != nil {
-		closeControl(control)
 		return nil, fmt.Errorf("opening %s: %w", path, classify(err, false))
 	}
-	p := &Port{port: port, path: path, control: control}
-
-	// Before the drain, so that the first bytes we take off the wire are taken under the same
-	// flow control every later byte will be — INV 8 is a claim about what tether did, and a
-	// drain done under the wrong terms would already have made it untrue.
-	if err := applyFlowControl(control, params.Flow == family.FlowRTSCTS); err != nil {
-		p.Close()
-		return nil, fmt.Errorf("setting flow control on %s: %w", path, err)
-	}
+	p := &Port{port: port, path: path}
 
 	// Whatever the radio said while nobody was listening is not part of any client's frame
 	// stream. Draining before the listener exists is the other half of INV 2.
@@ -141,9 +134,7 @@ func (p *Port) Write(b []byte) (int, error) {
 // restart free — and restarts are routine, because an agent supervising it self-updates.
 func (p *Port) Close() error {
 	p.closed.Store(true)
-	err := p.port.Close()
-	closeControl(p.control)
-	return err
+	return p.port.Close()
 }
 
 // classify maps a driver or library error onto ErrGone where it means the device left.

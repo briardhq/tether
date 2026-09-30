@@ -16,13 +16,6 @@ var goneErrors []error
 
 func openControl(path string) (int, error) { return -1, nil }
 
-func applyFlowControl(fd int, on bool) error {
-	if on {
-		return errors.New("RTS/CTS flow control is implemented for Linux only")
-	}
-	return nil
-}
-
 func closeControl(fd int) {}
 
 func disableAutosuspend(path string) {}
