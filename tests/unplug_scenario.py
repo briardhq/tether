@@ -43,6 +43,8 @@ it, `--unplug`/`--replug` are the commands that remove and restore it, and tethe
         --unplug "printf 'device_del usb0\\n' | socat - unix-connect:monitor.sock" \\
         --replug "printf 'device_add usb-host,hostbus=1,hostaddr=4,id=usb0\\n' | socat - unix-connect:monitor.sock"
 
+`--radio ezsp` puts bellows on the end instead, for a Silicon Labs stick (zigpy only).
+
 That form is the one scenario no emulator can stage on Windows, because a COM port the
 hypervisor keeps alive never goes away. ⚠️ It also wants the stick passed through as a
 *device* (`usb-host`) rather than the guest holding its whole controller: a PCIe `device_del`
@@ -66,9 +68,9 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import zigpy.config
-from zigpy_znp.zigbee.application import ControllerApplication
-import zigpy_znp.config as conf
+from zigpy.application import ControllerApplication
 
+from client_gate import application
 from fake_coordinator import HerdsmanReplies, bind, build_server, znp_fixtures
 import rig
 from ptylink import PtyLink
@@ -96,10 +98,10 @@ async def until(predicate, what: str, timeout: float = 30.0) -> float:
     raise TimeoutError(f"timed out after {timeout:g}s waiting for {what}")
 
 
-async def client_for(endpoint: tuple[str, int]) -> ControllerApplication:
-    app = ControllerApplication(
+async def client_for(endpoint: tuple[str, int], radio: str) -> ControllerApplication:
+    app = application(radio)(
         {
-            conf.CONF_DEVICE: {conf.CONF_DEVICE_PATH: "socket://%s:%d" % endpoint},
+            zigpy.config.CONF_DEVICE: {zigpy.config.CONF_DEVICE_PATH: "socket://%s:%d" % endpoint},
             zigpy.config.CONF_NWK_BACKUP_ENABLED: False,
         }
     )
@@ -231,13 +233,13 @@ class Stick:
 
 async def run(tether_binary: pathlib.Path, client: str, workdir: pathlib.Path,
               device: str | None = None, unplug: str | None = None,
-              replug: str | None = None) -> int:
+              replug: str | None = None, radio: str = "znp") -> int:
     port = free_port()
     stick = Stick(workdir, client, device, unplug, replug)
 
     tether = rig.Tether(
         tether_binary,
-        {"device": stick.name, "radio": "znp", "listen": rig.listen(port), "advertise": False},
+        {"device": stick.name, "radio": radio, "listen": rig.listen(port), "advertise": False},
         workdir,
     )
     endpoint = tether.endpoint
@@ -246,7 +248,7 @@ async def run(tether_binary: pathlib.Path, client: str, workdir: pathlib.Path,
     try:
         await until(lambda: not refused(endpoint), "tether to accept")
         if client == "zigpy":
-            app = await client_for(endpoint)
+            app = await client_for(endpoint, radio)
             before = facts(app)
         else:
             # The Node client attaches, reports the network, and then blocks on the
@@ -336,7 +338,7 @@ async def run(tether_binary: pathlib.Path, client: str, workdir: pathlib.Path,
         )
 
         if client == "zigpy":
-            after = await client_for(endpoint)
+            after = await client_for(endpoint, radio)
             recovered = facts(after)
             await after.shutdown(db=False)
         else:
@@ -399,10 +401,18 @@ def main() -> int:
              "monitor, a smart hub's port off, or `read -p 'pull it, then Enter'`",
     )
     parser.add_argument("--replug", help="a shell command that puts it back")
+    parser.add_argument(
+        "--radio", choices=("znp", "ezsp"), default="znp",
+        help="the real stick's radio type (see client_gate.py); the emulator is znp",
+    )
     args = parser.parse_args()
 
     if args.device and not (args.unplug and args.replug):
         parser.error("--device needs --unplug and --replug: something has to pull a real stick")
+    if args.radio != "znp" and not args.device:
+        parser.error(f"there is no {args.radio} emulator: --radio {args.radio} needs --device")
+    if args.radio != "znp" and args.client == "herdsman":
+        parser.error("the herdsman client reads its network out of Z-Stack NVRAM, so it is znp only")
     if not args.device:
         # The unplug it stages is a pty closing, which has no equivalent on the far machine's
         # COM1: over there it is a real device, hot-removed by the hypervisor —
@@ -412,7 +422,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="tether-unplug-") as tmp:
         return asyncio.run(run(tether, args.client, pathlib.Path(tmp),
-                               args.device, args.unplug, args.replug))
+                               args.device, args.unplug, args.replug, args.radio))
 
 
 if __name__ == "__main__":
