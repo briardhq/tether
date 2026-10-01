@@ -1,8 +1,11 @@
 package device
 
 import (
+	"encoding/binary"
+	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The pure part of the Windows identification path — instance IDs, which nodes are one piece
@@ -81,4 +84,41 @@ func comNumber(port string) (int, bool) {
 	}
 	n, err := strconv.Atoi(port[3:])
 	return n, err == nil
+}
+
+// powerDataAsleep reads a device's CM_POWER_DATA — what SPDRP_DEVICE_POWER_DATA returns — and
+// says whether the device is in a low-power state now. The struct opens with its own size and
+// then PD_MostRecentPowerState, a DEVICE_POWER_STATE: 1 is D0, working, and 2–4 are D1–D3.
+// That field is maintained by the power manager for every device node, so the answer does not
+// depend on which driver the adapter runs.
+func powerDataAsleep(b []byte) (bool, error) {
+	if len(b) < 8 {
+		return false, fmt.Errorf("power data is %d bytes, too short to carry a power state", len(b))
+	}
+	switch state := binary.LittleEndian.Uint32(b[4:8]); state {
+	case 1:
+		return false, nil
+	case 2, 3, 4:
+		return true, nil
+	default:
+		return false, fmt.Errorf("power data reports device power state %d, which is not D0–D3", state)
+	}
+}
+
+// suspendClock turns point samples of "asleep now" into a cumulative suspended time, so that
+// Windows, which keeps only the current state, answers the same question Linux's counter does.
+// A sample that finds the device asleep charges the whole interval since the previous sample:
+// an upper bound, exact only to within one sampling interval, but never zero for a suspend that
+// was seen — and seeing it is the point.
+type suspendClock struct {
+	last  time.Time
+	total time.Duration
+}
+
+func (c *suspendClock) observe(asleep bool, now time.Time) time.Duration {
+	if asleep && !c.last.IsZero() {
+		c.total += now.Sub(c.last)
+	}
+	c.last = now
+	return c.total
 }

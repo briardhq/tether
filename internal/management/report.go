@@ -99,8 +99,10 @@ type Card struct {
 	// SuspendedMs is how long the adapter has spent in USB runtime suspend *while tether held
 	// it*, summed over every open since start, and SuspendedAt when that was last seen to grow.
 	// Anything above zero is the "works fine, then dies after N minutes" class caught in the
-	// act: a coordinator suspended with its port open cannot announce an inbound frame. Absent
-	// where the platform keeps no suspend counter — absent and zero say different things.
+	// act: a coordinator suspended with its port open cannot announce an inbound frame. Exact on
+	// Linux, where the kernel counts it; on Windows, which keeps only the current power state, it
+	// is sampled once a probe interval and so exact only to within one. Absent where there is
+	// nothing to read — absent and zero say different things.
 	SuspendedMs *uint64   `json:"device_suspended_ms,omitempty"`
 	SuspendedAt time.Time `json:"device_suspended_at,omitzero"`
 }

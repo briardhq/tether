@@ -3,6 +3,7 @@ package device
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // The instance ID is where Windows keeps the only two fields that identify an adapter without
@@ -84,5 +85,48 @@ func TestLessPortCountsRatherThanSpells(t *testing.T) {
 	// is asserted only so the comparison stays total, which sort.SliceStable requires.
 	if lessPort("COM3", "") || !lessPort("", "COM3") {
 		t.Error("comparing a named port with an unnamed one is not a total order")
+	}
+}
+
+// The two bytes that matter sit at offset 4, after the struct's own size. The fixtures are the
+// Sonoff's own CM_POWER_DATA as Windows reported it, awake with its port open and asleep ten
+// seconds after closing it — the field that changed, and nothing else did.
+func TestPowerDataAsleep(t *testing.T) {
+	awake := []byte{56, 0, 0, 0, 1, 0, 0, 0, 25, 0, 0, 0}
+	asleep := []byte{56, 0, 0, 0, 4, 0, 0, 0, 25, 0, 0, 0}
+	if got, err := powerDataAsleep(awake); err != nil || got {
+		t.Errorf("D0 read as asleep=%v, err=%v", got, err)
+	}
+	if got, err := powerDataAsleep(asleep); err != nil || !got {
+		t.Errorf("D3 read as asleep=%v, err=%v", got, err)
+	}
+	if _, err := powerDataAsleep([]byte{56, 0, 0}); err == nil {
+		t.Error("a truncated struct read as a state, want an error")
+	}
+	if _, err := powerDataAsleep([]byte{56, 0, 0, 0, 0, 0, 0, 0}); err == nil {
+		t.Error("PowerDeviceUnspecified read as a state, want an error rather than a guess")
+	}
+}
+
+// The clock charges an interval only to a sample that saw the device asleep, and the first
+// sample, having no interval behind it, charges nothing.
+func TestSuspendClockChargesOnlyIntervalsThatEndAsleep(t *testing.T) {
+	var c suspendClock
+	t0 := time.Unix(1000, 0)
+	steps := []struct {
+		asleep bool
+		at     time.Duration
+		want   time.Duration
+	}{
+		{true, 0, 0}, // first sample: no interval yet, even asleep
+		{false, 60 * time.Second, 0},
+		{true, 120 * time.Second, 60 * time.Second},
+		{true, 180 * time.Second, 120 * time.Second},
+		{false, 240 * time.Second, 120 * time.Second},
+	}
+	for i, s := range steps {
+		if got := c.observe(s.asleep, t0.Add(s.at)); got != s.want {
+			t.Errorf("step %d: total %v, want %v", i, got, s.want)
+		}
 	}
 }

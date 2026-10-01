@@ -33,10 +33,71 @@ func closeControl(fd int) {}
 
 func disableAutosuspend(path string) {}
 
-// runtimeSuspended has no counter to read: the device properties carry a node's current power
-// state (DEVPKEY_Device_PowerData) but nothing cumulative, so there is no Windows equivalent of
-// the time-suspended total to report.
-func runtimeSuspended(path string) (time.Duration, error) { return 0, errors.ErrUnsupported }
+// runtimeSuspended answers the cumulative question from point samples. Windows keeps a device
+// node's current power state and nothing cumulative — of the properties a CP210x carries, that
+// state is the only one that moves when it suspends — so each call samples it and suspendClock
+// keeps the total. The resolution is the caller's sampling interval; a suspend shorter than one
+// interval can fall between two samples and go unseen, which long running makes unlikely to
+// last.
+//
+// The node read is the one that holds the COM port — the USB node itself for a CP210x or a CDC
+// adapter, an enumerator's child for FTDI, whose D-state follows its parent's.
+func runtimeSuspended(path string) (time.Duration, error) {
+	asleep, err := portAsleep(path)
+	if err != nil {
+		return 0, err
+	}
+	suspendMu.Lock()
+	defer suspendMu.Unlock()
+	c := suspendClocks[path]
+	if c == nil {
+		c = &suspendClock{}
+		suspendClocks[path] = c
+	}
+	return c.observe(asleep, time.Now()), nil
+}
+
+// One clock per port for the life of the process. A replug keeps the same COM name and so the
+// same clock, which is harmless: what is charged before an open is subtracted as the baseline.
+var (
+	suspendMu     sync.Mutex
+	suspendClocks = map[string]*suspendClock{}
+)
+
+// portAsleep finds the device node holding the named COM port and reads its power state.
+func portAsleep(path string) (bool, error) {
+	set, err := windows.SetupDiGetClassDevsEx(nil, "", 0,
+		windows.DIGCF_ALLCLASSES|windows.DIGCF_PRESENT, 0, "")
+	if err != nil {
+		return false, fmt.Errorf("listing devices: %w", err)
+	}
+	defer windows.SetupDiDestroyDeviceInfoList(set)
+
+	want := strings.TrimPrefix(path, `\\.\`)
+	for i := 0; ; i++ {
+		data, err := windows.SetupDiEnumDeviceInfo(set, i)
+		if err != nil {
+			break
+		}
+		instance, err := windows.SetupDiGetDeviceInstanceId(set, data)
+		if err != nil {
+			continue
+		}
+		if _, _, ok := parseInstanceID(instance); !ok || !strings.EqualFold(portName(set, data), want) {
+			continue
+		}
+		v, err := windows.SetupDiGetDeviceRegistryProperty(set, data, windows.SPDRP_DEVICE_POWER_DATA)
+		if err != nil {
+			return false, fmt.Errorf("reading the power state of %s: %w", instance, err)
+		}
+		b, ok := v.([]byte)
+		if !ok {
+			return false, fmt.Errorf("the power state of %s is a %T, not bytes", instance, v)
+		}
+		return powerDataAsleep(b)
+	}
+	return false, fmt.Errorf("no device holds %s", path)
+}
 
 // KeepSystemAwake asks Windows not to idle the machine into sleep for as long as this process
 // lives. A coordinator is idle for long stretches by design and must still answer at once, and
