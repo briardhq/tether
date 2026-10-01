@@ -60,6 +60,10 @@ func closeControl(fd int) {
 	}
 }
 
+// KeepSystemAwake does nothing here. Idle sleep on Linux is a desktop session's policy, held off
+// through logind over D-Bus, and nothing in this program speaks D-Bus.
+func KeepSystemAwake() {}
+
 // disableAutosuspend stops the kernel powering the adapter down when it looks idle. A Zigbee
 // coordinator is idle for long stretches by design and must still answer instantly, so
 // autosuspend turns into the "works fine, then dies after N minutes" class — the load-dependent

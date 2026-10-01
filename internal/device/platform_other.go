@@ -25,6 +25,8 @@ func runtimeSuspended(path string) (time.Duration, error) { return 0, errors.Err
 
 func adviseUnstablePath(path string) {}
 
+func KeepSystemAwake() {}
+
 // DescribeUSB has no portable form: identifying a USB adapter means reading descriptors, and
 // every platform keeps them somewhere of its own — a filesystem here, SetupAPI on Windows. So
 // this says so instead of pretending, because the family table's whole point is not guessing.

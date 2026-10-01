@@ -109,6 +109,10 @@ func retryDelay(attempt int) time.Duration {
 // an address that will not bind, a dongle swapped for a different family — so whatever
 // supervises tether should report them rather than restart blindly into them.
 func serve(ctx context.Context, opts Options) error {
+	// For the whole run, not per device: a machine that sleeps while the dongle is unplugged
+	// misses the replug.
+	device.KeepSystemAwake()
+
 	census := management.NewCensus()
 	p := pipe.New(census.Observe)
 	monitor := management.NewMonitor(p, census)

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -32,9 +33,68 @@ func closeControl(fd int) {}
 
 func disableAutosuspend(path string) {}
 
-// runtimeSuspended has no counter to read: selective suspend is the driver's business here, and
-// no driver publishes how long a device has spent in it.
+// runtimeSuspended has no counter to read: the device properties carry a node's current power
+// state (DEVPKEY_Device_PowerData) but nothing cumulative, so there is no Windows equivalent of
+// the time-suspended total to report.
 func runtimeSuspended(path string) (time.Duration, error) { return 0, errors.ErrUnsupported }
+
+// KeepSystemAwake asks Windows not to idle the machine into sleep for as long as this process
+// lives. A coordinator is idle for long stretches by design and must still answer at once, and
+// a host that sleeps takes the whole network with it — so serving one is the activity, whether
+// or not anybody is at the keyboard.
+//
+// A power request rather than SetThreadExecutionState, for two reasons: it belongs to the
+// process rather than to whichever OS thread made the call, which a goroutine cannot promise;
+// and `powercfg /requests` lists it with the reason below, so whoever wonders why the machine
+// stays up can find out who is holding it. The handle is never closed — process exit releases
+// it.
+//
+// It holds off *idle* sleep only. A closed lid, the power button or Start → Sleep still win,
+// which is right: those are a person deciding.
+//
+// Best-effort, and never silent: a machine that may still sleep under tether is worth one line.
+func KeepSystemAwake() {
+	if err := requestSystemRequired(); err != nil {
+		log.Printf("device: could not ask Windows to keep the machine awake (%v); "+
+			"if it sleeps when idle, the coordinator goes with it", err)
+		return
+	}
+	log.Printf("device: holding the machine out of idle sleep while tether runs " +
+		"(listed by `powercfg /requests`)")
+}
+
+var (
+	kernel32               = windows.NewLazySystemDLL("kernel32.dll")
+	procPowerCreateRequest = kernel32.NewProc("PowerCreateRequest")
+	procPowerSetRequest    = kernel32.NewProc("PowerSetRequest")
+)
+
+// powerSystemReason is what `powercfg /requests` shows against tether.
+const powerSystemReason = "briard-tether is serving a Zigbee coordinator to the network"
+
+func requestSystemRequired() error {
+	reason, err := windows.UTF16PtrFromString(powerSystemReason)
+	if err != nil {
+		return err
+	}
+	// REASON_CONTEXT with POWER_REQUEST_CONTEXT_SIMPLE_STRING: version, flags, then the union's
+	// first member, the string pointer — all that this flag makes the call read.
+	ctx := struct {
+		Version uint32
+		Flags   uint32
+		Reason  *uint16
+	}{Version: 0, Flags: 0x1, Reason: reason}
+	h, _, err := procPowerCreateRequest.Call(uintptr(unsafe.Pointer(&ctx)))
+	if windows.Handle(h) == windows.InvalidHandle {
+		return fmt.Errorf("PowerCreateRequest: %w", err)
+	}
+	const powerRequestSystemRequired = 1
+	if ok, _, err := procPowerSetRequest.Call(h, powerRequestSystemRequired); ok == 0 {
+		windows.CloseHandle(windows.Handle(h))
+		return fmt.Errorf("PowerSetRequest: %w", err)
+	}
+	return nil
+}
 
 // adviseUnstablePath has nothing to advise. A COM name is already per device *instance*, so a
 // stick with a serial number keeps its number across replugs and there is no second, stabler

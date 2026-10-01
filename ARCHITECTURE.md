@@ -316,7 +316,9 @@ binary wants anyway. The release stamps its version into the binary, and `briard
 the first log line and the report card all say which build is running.
 
 On Windows, `install` registers a service with the Service Control Manager, which is also the only
-way to stop a tether there from outside its own console.
+way to stop a tether there from outside its own console. A running tether holds the machine out of
+idle sleep with a system-required power request, listed by `powercfg /requests`; a closed lid, the
+power button or Start → Sleep still win.
 
 ## Dependencies
 
