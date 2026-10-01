@@ -264,7 +264,7 @@ func report(out io.Writer, system bool, unitPath, source, binary string, copied,
 
 	if system {
 		fmt.Fprintf(out, "as          root — the one thing on this machine that needs it is keeping the\n")
-		fmt.Fprintf(out, "            adapter out of USB runtime suspend, and the card is 0666 regardless\n")
+		fmt.Fprintf(out, "            adapter out of USB runtime suspend; `status` and `restart` want sudo\n")
 		fmt.Fprintf(out, "rule        %s — %d adapter ids kept out of USB runtime suspend\n",
 			udevRulePath, len(family.IDs()))
 		fmt.Fprintf(out, "            it applies when a device appears, so replug an adapter that is already\n")
@@ -502,8 +502,8 @@ func unitText(binary string, system bool) string {
 		// and the guard against the load-dependent failure class could only ever be armed out
 		// of band by the udev rule. That would bound an autosuspend strategy to a privilege
 		// the service can simply have, which is a limit better left undrawn than discovered
-		// from inside. The status socket does not pay for this: it is 0666 whoever binds it,
-		// so a root service's card is still readable by the operator who asks.
+		// from inside. The status socket does pay for it: it is its owner's alone, because it
+		// also resets the radio, so an operator asks a root service with sudo.
 		// **And no hardening directives**, which is the same decision rather than a second one.
 		// DynamicUser brings ProtectSystem=strict and ProtectHome=read-only along; each would
 		// be another limit to discover from inside while designing the autosuspend strategy,

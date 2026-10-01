@@ -23,7 +23,8 @@ knows nothing about Zigbee. tether is built for this one job:
 - **Fails loudly.** On unplug the client's connection closes at once, so it recovers instead of
   hanging, and tether reopens the dongle when it returns.
 - **Liveness probe.** While no client is connected, tether pings the radio (TI/ZNP sticks), so a
-  wedged dongle is noticed rather than discovered by the next client.
+  wedged dongle is noticed rather than discovered by the next client — and `briard-tether
+  restart` resets one without unplugging it (Sonoff ZBDongle-P so far).
 - **No USB power saving.** Keeps the OS from suspending the dongle, a classic cause of setups that
   die after a while.
 - **Zigbee-aware status.** `briard-tether status` shows the adapter, the client and the traffic:
@@ -72,8 +73,14 @@ knows nothing about Zigbee. tether is built for this one job:
 That's it. tether is now a service that starts at boot, finds your dongle, and advertises it on
 your network. There is nothing to configure.
 
-To check on it, run the same file with `status` (`./briard-tether-linux-amd64 status`). To remove
-it, use `uninstall` the same way you used `install`.
+To check on it, run the same file with `status`, the same way you ran `install`
+(`sudo ./briard-tether-linux-amd64 status`). To remove it, use `uninstall` the same way.
+
+If the dongle stops answering — `status` says the probe failed — stop zigbee2mqtt or ZHA and run
+`restart` the same way; it resets the radio and says whether it came back. It works on the Sonoff
+ZBDongle-P so far; on other sticks, unplug and replug. To flash new firmware, stop the service
+(`systemctl stop briard-tether`, or `Stop-Service briard-tether` on Windows), use the vendor's
+flasher as if tether were not there, and start it again.
 
 ## Use it with zigbee2mqtt
 

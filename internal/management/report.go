@@ -1,14 +1,17 @@
 package management
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -141,6 +144,9 @@ type Monitor struct {
 	listen        string
 	openAttempts  uint64
 	absence       string
+	// restart resets the radio on the adapter now open, and is nil when there is none or no
+	// restart is known for it.
+	restart func() error
 
 	// The suspend watch. suspended reads the open adapter's cumulative counter and is nil
 	// while there is none to read; suspendBase is its last reading, so only growth *during*
@@ -201,7 +207,9 @@ func (m *Monitor) Probe() (Result, error) {
 //
 // suspended reads the adapter's cumulative USB suspend counter, and may be nil. Its first
 // reading is the baseline: what the counter says at open happened while nobody held the port.
-func (m *Monitor) DeviceOpened(radio family.Radio, suspended func() (time.Duration, error)) {
+//
+// restart resets this adapter's radio, and is nil where no restart is known for it.
+func (m *Monitor) DeviceOpened(radio family.Radio, suspended func() (time.Duration, error), restart func() error) {
 	m.census.Adopt(radio)
 
 	var base time.Duration
@@ -223,6 +231,7 @@ func (m *Monitor) DeviceOpened(radio family.Radio, suspended func() (time.Durati
 	m.generation++
 	m.suspended, m.suspendBase = suspended, base
 	m.suspendWatched = m.suspendWatched || suspended != nil
+	m.restart = restart
 	m.mu.Unlock()
 
 	// Said when it is learned rather than at startup, and said once: whether this radio has a
@@ -248,6 +257,7 @@ func (m *Monitor) NoDevice(reason string) {
 	m.absence = reason
 	m.generation++
 	m.suspended = nil
+	m.restart = nil
 	m.mu.Unlock()
 }
 
@@ -452,8 +462,11 @@ func (c Card) Summary() string {
 	return s
 }
 
-// ServeStatus answers `tether status` on a unix socket until ctx ends. One connection, one
-// card, one close — there is no protocol here to get wrong or to version.
+// ServeStatus answers `tether status` on a unix socket until ctx ends, and takes the restart
+// verb on the same socket. Every connection is handed the card first; a reader that wants
+// nothing more closes, and one that wants a restart writes `restart` on a line of its own and
+// reads one RestartResult back. That is the whole protocol, and a plain status reader never
+// sees any of it.
 //
 // A failure to listen is returned rather than fatal, and the caller must treat it that way:
 // losing the status socket costs observability, and taking the radio down to punish that would
@@ -476,17 +489,14 @@ func (m *Monitor) ServeStatus(ctx context.Context, path string) error {
 		return fmt.Errorf("listening on the status socket %s: %w", path, err)
 	}
 	defer listener.Close()
-	// Connectable by any local user, not only the one tether runs as. net.Listen leaves the
-	// file at 0777 &^ umask — 0755 under a service manager — and connecting to a unix socket
-	// wants the write bit, so without this the card is readable by the service user and by
-	// root and by nobody else, which is "observable from outside" for nobody. The card is
-	// read-only and every field on it is already in the log, so there is nothing here to keep
-	// from a local reader. Set after the bind rather than through the umask, because the umask
-	// is the service manager's and not ours. Best-effort like the rest of this: a socket only
-	// the user tether runs as can reach is still a socket.
-	if err := os.Chmod(path, 0o666); err != nil {
-		log.Printf("management: could not make the status socket readable by every local user "+
-			"(%v); `briard-tether status` works only as the user tether runs as", err)
+	// Connectable by the user tether runs as, and by root — nobody else. The socket resets the
+	// radio on request, so who can connect is who can take a Zigbee network down for a few
+	// seconds. net.Listen leaves the file at 0777 &^ umask, which is the service manager's
+	// choice rather than ours and can leave the group able to connect, so the mode is set
+	// after the bind. A failure to set it is fatal to the socket rather than logged past: a
+	// socket that resets a radio is not served at a mode nobody chose.
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("restricting the status socket to its owner: %w", err)
 	}
 	log.Printf("management: status readable at %s", path)
 
@@ -507,6 +517,10 @@ func (m *Monitor) ServeStatus(ctx context.Context, path string) error {
 	}
 }
 
+// commandWait is how long a connection may take to say what it wants after the card. A status
+// reader closes at once; this bounds one that does neither.
+const commandWait = 5 * time.Second
+
 func (m *Monitor) answer(conn net.Conn) {
 	defer conn.Close()
 	// A reader that has gone away must not hold a goroutine open against a pipe that is busy
@@ -514,7 +528,52 @@ func (m *Monitor) answer(conn net.Conn) {
 	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	if err := json.NewEncoder(conn).Encode(m.Card()); err != nil {
 		log.Printf("management: could not answer a status request: %v", err)
+		return
 	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(commandWait))
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		return // the status reader closing, which is the common case
+	}
+	var result RestartResult
+	switch command := strings.TrimSpace(line); command {
+	case "restart":
+		result = m.Restart()
+	default:
+		result = failed(fmt.Sprintf("%q is not something tether does; the one command is restart", command))
+	}
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if err := json.NewEncoder(conn).Encode(result); err != nil {
+		log.Printf("management: could not answer a restart request: %v", err)
+	}
+}
+
+// RequestRestart asks a running tether to restart its radio, and returns what that came to.
+// The error is for not reaching the tether; a restart it attempted and failed is a result.
+func RequestRestart(path string) (RestartResult, error) {
+	conn, err := net.DialTimeout("unix", path, 2*time.Second)
+	if err != nil {
+		return RestartResult{}, fmt.Errorf("no tether answering at %s: %w", path, err)
+	}
+	defer conn.Close()
+	// Long enough for a probe to finish, the restart to wait out its whole deadline, and the
+	// ping after it.
+	_ = conn.SetDeadline(time.Now().Add(busyRetry + 2*restartTimeout + 5*time.Second))
+
+	dec := json.NewDecoder(conn)
+	var card Card
+	if err := dec.Decode(&card); err != nil {
+		return RestartResult{}, fmt.Errorf("reading the status from %s: %w", path, err)
+	}
+	if _, err := io.WriteString(conn, "restart\n"); err != nil {
+		return RestartResult{}, fmt.Errorf("asking %s for a restart: %w", path, err)
+	}
+	var result RestartResult
+	if err := dec.Decode(&result); err != nil {
+		return RestartResult{}, fmt.Errorf("reading the restart result from %s: %w", path, err)
+	}
+	return result, nil
 }
 
 // ReadStatus fetches and decodes a card from a running tether. It is the client half of the

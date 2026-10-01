@@ -40,7 +40,7 @@ func TestStatusVerbReadsARunningTether(t *testing.T) {
 	p.Serve(radio)
 
 	m := management.NewMonitor(p, nil)
-	m.DeviceOpened(family.ZNP, nil)
+	m.DeviceOpened(family.ZNP, nil, nil)
 	if _, err := m.Probe(); err != nil {
 		t.Fatalf("probing: %v", err)
 	}

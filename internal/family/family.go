@@ -245,6 +245,43 @@ func IDs() []Device {
 	return ids
 }
 
+// Restart is how the host resets an adapter's radio, for the adapters where that is known.
+//
+// It is per adapter rather than per family because it is a property of the board: which of
+// the bridge's modem lines, if any, someone wired to the radio's reset pin. And it is a
+// separate table rather than a column in the one above because almost no row has an answer —
+// an entry is added only once it has been measured on the stick itself. A guessed sequence is
+// worse than none, since the line that resets one board is the bootloader line on another.
+type Restart string
+
+const (
+	// NoRestart is every adapter nobody has measured. The verb refuses on them.
+	NoRestart Restart = ""
+
+	// RestartDTR holds the radio in reset by lowering DTR while RTS stays raised, and lets it
+	// boot by raising DTR again. tether keeps both lines raised (INV 7), so this is the only
+	// line that moves, and it ends where it started. Lowering RTS instead does nothing visible
+	// on these boards; it is the bootloader line, which the radio reads only as it boots.
+	RestartDTR Restart = "dtr"
+)
+
+// restarts is the measured entries, keyed by the table's name for the adapter. A name here
+// that no row carries is caught by a test, so renaming a row cannot quietly drop its restart.
+var restarts = map[string]Restart{
+	// Held in reset for as long as DTR is low — it answers nothing — and announces a fresh
+	// boot about two seconds after DTR rises again.
+	"Sonoff ZBDongle-P (CC2652P)": RestartDTR,
+}
+
+// RestartOf says how to reset the radio on an adapter, or NoRestart.
+func RestartOf(d Device) Restart {
+	name, ok := Identify(d)
+	if !ok {
+		return NoRestart
+	}
+	return restarts[name]
+}
+
 // Defaults returns the parameters for a family named directly, which is how the config
 // override reaches this package: the user says which radio they have and the table supplies
 // the rest. Baud stays overridable on top of this, because some EZSP firmware wants 57600.

@@ -1,6 +1,7 @@
 package management
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -61,12 +62,20 @@ type Peer struct {
 // An unreadable directory is no tethers rather than an error. The commonest reason for one is
 // the ordinary reason there are none — nothing has ever created it.
 func Peers(dir string) []Peer {
+	peers, _ := peersIn(dir)
+	return peers
+}
+
+// peersIn is Peers, and also says whether a socket refused this reader. That one is not skipped
+// in silence: the socket is its owner's (see ServeStatus), so a tether running as root refuses
+// an ordinary user, and "no tether is answering" would send them looking for a fault that is
+// not there.
+func peersIn(dir string) (peers []Peer, denied bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 
-	var peers []Peer
 	for _, e := range entries {
 		pid, ok := pidOf(e.Name())
 		if !ok {
@@ -75,13 +84,15 @@ func Peers(dir string) []Peer {
 		path := filepath.Join(dir, e.Name())
 		card, err := ReadStatus(path)
 		if err != nil {
-			// Left by a tether that is gone. Nothing to say that anyone can act on.
+			// Left by a tether that is gone, which nothing can act on — or one that is not
+			// this reader's to ask, which somebody can.
+			denied = denied || errors.Is(err, os.ErrPermission)
 			continue
 		}
 		peers = append(peers, Peer{PID: pid, Path: path, Card: card})
 	}
 	sort.Slice(peers, func(i, j int) bool { return peers[i].PID < peers[j].PID })
-	return peers
+	return peers, denied
 }
 
 // pidOf reads the process id back out of a socket's name, and reports whether the name was one
@@ -116,21 +127,34 @@ func pidOf(name string) (int, bool) {
 // than the single-directory read did.
 func FindPeer(dirs []string, pid int) (Peer, error) {
 	var peers []Peer
+	var denied bool
 	for _, dir := range dirs {
-		peers = append(peers, Peers(dir)...)
+		found, refused := peersIn(dir)
+		peers = append(peers, found...)
+		denied = denied || refused
 	}
 	sort.Slice(peers, func(i, j int) bool { return peers[i].PID < peers[j].PID })
 	where := strings.Join(dirs, " or ")
+	// Said only in place of "not found": a reader who found the tether they wanted does not
+	// need to hear about one they cannot ask.
+	notOurs := fmt.Errorf("a tether in %s is running as another user, and its socket answers "+
+		"only that user and root — ask again with sudo", where)
 	if pid != 0 {
 		for _, p := range peers {
 			if p.PID == pid {
 				return p, nil
 			}
 		}
+		if denied {
+			return Peer{}, notOurs
+		}
 		return Peer{}, fmt.Errorf("no tether with process id %d is answering in %s", pid, where)
 	}
 	switch len(peers) {
 	case 0:
+		if denied {
+			return Peer{}, notOurs
+		}
 		return Peer{}, fmt.Errorf("no tether is answering in %s", where)
 	case 1:
 		return peers[0], nil

@@ -212,6 +212,8 @@ type exchange struct {
 	replied  chan struct{}
 	finished chan struct{}
 	closed   bool
+	// wait is how long a connecting client waits for this exchange — see waitForExchange.
+	wait time.Duration
 }
 
 // gather appends what the device said and reports whether the reply is now whole. Callers
@@ -484,6 +486,10 @@ func (p *Pipe) closeCurrent(reason string) {
 // finish. It is a backstop, not a timeout anyone should reach: an exchange carries its own
 // deadline and a probe's is a fraction of this. A client must never be locked out by a health
 // check — that is the ser2net failure this project exists to not repeat.
+//
+// A restart is the one exchange that runs longer, and its client waits for the whole of it:
+// the radio is booting and answers nothing, so cutting in would buy the client nothing but
+// a reset indication it did not cause, delivered in place of the restart's own.
 const maxExchangeWait = 2 * time.Second
 
 // drainWindow is how much longer a timed-out exchange keeps the device to itself, absorbing an
@@ -510,10 +516,27 @@ const drainWindow = 250 * time.Millisecond
 // says something different about the radio than silence does, and the caller is the only thing
 // that can tell them apart.
 func (p *Pipe) Exchange(req []byte, complete func([]byte) bool, timeout time.Duration) ([]byte, error) {
+	return p.exchange(func(dev io.Writer) error {
+		if _, err := dev.Write(req); err != nil {
+			return fmt.Errorf("writing an out-of-band request: %w", err)
+		}
+		return nil
+	}, complete, timeout)
+}
+
+// Act is Exchange for a request that is not bytes: act does something to the radio out of
+// band — pulls its reset line — and what the radio says afterwards is collected exactly as an
+// answer would be, under the same exclusion. Nothing is written to the device.
+func (p *Pipe) Act(act func() error, complete func([]byte) bool, timeout time.Duration) ([]byte, error) {
+	return p.exchange(func(io.Writer) error { return act() }, complete, timeout)
+}
+
+func (p *Pipe) exchange(send func(io.Writer) error, complete func([]byte) bool, timeout time.Duration) ([]byte, error) {
 	ex := &exchange{
 		complete: complete,
 		replied:  make(chan struct{}),
 		finished: make(chan struct{}),
+		wait:     max(maxExchangeWait, timeout+drainWindow),
 	}
 
 	p.mu.Lock()
@@ -539,8 +562,8 @@ func (p *Pipe) Exchange(req []byte, complete func([]byte) bool, timeout time.Dur
 		close(ex.finished)
 	}()
 
-	if _, err := dev.Write(req); err != nil {
-		return nil, fmt.Errorf("writing an out-of-band request: %w", err)
+	if err := send(dev); err != nil {
+		return nil, err
 	}
 
 	timer := time.NewTimer(timeout)
@@ -579,13 +602,13 @@ func (p *Pipe) waitForExchange() {
 	if ex == nil {
 		return
 	}
-	timer := time.NewTimer(maxExchangeWait)
+	timer := time.NewTimer(ex.wait)
 	defer timer.Stop()
 	select {
 	case <-ex.finished:
 	case <-timer.C:
 		log.Printf("pipe: an out-of-band exchange has held the device for %v; taking it for the "+
-			"waiting client, which may see one frame it did not ask for", maxExchangeWait)
+			"waiting client, which may see one frame it did not ask for", ex.wait)
 	}
 }
 

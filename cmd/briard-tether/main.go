@@ -46,6 +46,8 @@ func main() {
 		os.Exit(runVerb(os.Args[2:]))
 	case "status":
 		os.Exit(statusVerb(os.Stdout, os.Stderr, management.SocketDirs(), os.Args[2:]))
+	case "restart":
+		os.Exit(restartVerb(os.Stdout, os.Stderr, management.SocketDirs(), os.Args[2:]))
 	case "install":
 		os.Exit(installVerb(os.Stdout, os.Stderr, os.Stdin, os.Args[2:]))
 	case "uninstall":
@@ -156,6 +158,7 @@ func usage(w io.Writer) {
 	fmt.Fprintf(w, "usage:\n")
 	fmt.Fprintf(w, "  briard-tether run [-config <path>]   serve the adapter, and advertise it\n")
 	fmt.Fprintf(w, "  briard-tether status [-pid <id>]     what a running tether says about itself\n")
+	fmt.Fprintf(w, "  briard-tether restart [-pid <id>]    reset a radio that has stopped answering\n")
 	fmt.Fprintf(w, "  briard-tether install                install the service and start it\n")
 	fmt.Fprintf(w, "  briard-tether uninstall              stop it and remove what install wrote\n")
 	fmt.Fprintf(w, "  briard-tether version                which build this is\n")
@@ -202,6 +205,39 @@ func statusVerb(out, errOut io.Writer, dirs []string, args []string) int {
 		return 1
 	}
 	render(out, peer.Card)
+	return 0
+}
+
+// restartVerb asks a running tether to reset its radio, and returns 0 only when the radio
+// announced that it booted. It finds the tether the way status does, and refuses in the same
+// words when there is more than one.
+//
+// It is wedge recovery, not maintenance: the clients recover a healthy radio in band, and a
+// running tether refuses while one is attached.
+func restartVerb(out, errOut io.Writer, dirs []string, args []string) int {
+	flags := flag.NewFlagSet("restart", flag.ContinueOnError)
+	flags.SetOutput(errOut)
+	pid := flags.Int("pid", 0, "which tether to ask, when more than one is running on this host")
+	if err := flags.Parse(args); err != nil {
+		return 1
+	}
+
+	peer, err := management.FindPeer(dirs, *pid)
+	if err != nil {
+		fmt.Fprintf(errOut, "briard-tether restart: %v\n", err)
+		return 1
+	}
+	result, err := management.RequestRestart(peer.Path)
+	if err != nil {
+		fmt.Fprintf(errOut, "briard-tether restart: %v\n", err)
+		return 1
+	}
+	if !result.OK {
+		fmt.Fprintf(errOut, "briard-tether restart: %s\n", result.Error)
+		return 1
+	}
+	fmt.Fprintf(out, "restarted — the radio announced a %s boot %.0f ms after the reset\n",
+		result.ResetReason, result.BootMs)
 	return 0
 }
 

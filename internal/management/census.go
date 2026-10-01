@@ -52,10 +52,11 @@ type FrameCounts struct {
 	UnframedBytes uint64 `json:"unframed_bytes"`
 
 	// Resets are the radio telling us it restarted, split by the reason it gave. External is
-	// the one that matters most: it means something pulled the reset line, which is the thing
-	// INV 1 and INV 7 claim cannot happen here. A nonzero count without a reset verb having
-	// been issued is tether being wrong in production, and it is the only way we would find
-	// that out short of somebody noticing their network re-formed.
+	// the one that matters most: on radios that report a pin reset that way, it means
+	// something pulled the reset line, which is the thing INV 1 and INV 7 claim cannot happen
+	// here. tether's own restart is an exchange and is never counted, so a nonzero count is
+	// tether being wrong in production. ⚠️ The CC2652P reports a pin reset as a power-up
+	// (measured on the ZBDongle-P), so on that radio the same fault lands in ResetsPowerUp.
 	ResetsPowerUp   uint64    `json:"resets_power_up"`
 	ResetsExternal  uint64    `json:"resets_external"`
 	ResetsWatchdog  uint64    `json:"resets_watchdog"`

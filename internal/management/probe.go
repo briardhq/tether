@@ -1,9 +1,9 @@
 // Package management is part 5 of ARCHITECTURE.md "The shape": the out-of-band verbs that do
-// not ride the byte stream. Today that is the liveness probe; the reset and bootloader verbs
-// join it.
+// not ride the byte stream — the liveness probe and the radio restart.
 //
 // It is the only package permitted to know what a byte on the UART means, and the liveness
-// probe is the only reason it may. Every vendor who built one of these started with a dumb
+// probe is the main reason it may; the restart reads one frame more, the radio announcing that
+// it booted. Every vendor who built one of these started with a dumb
 // bridge and ended up parsing frames inside it; this is the one landing spot where that earns
 // its place, because "the TCP port is open" is not a health signal — it stays true
 // with the radio wedged, and stays true with the radio gone until something writes to it.
@@ -136,6 +136,12 @@ func checksum(f []byte) byte {
 // is not this response — is stepped over rather than treated as a failure, which is also what
 // makes this usable as the "is it complete yet" test while bytes are still arriving.
 func pingResponse(b []byte) (payload []byte, ok bool) {
+	return findFrame(b, typeSRSP, subsystemSYS, commandPing)
+}
+
+// findFrame is pingResponse for any one frame: the first that checks out and carries this
+// type, subsystem and command id.
+func findFrame(b []byte, typ, subsystem, id byte) (payload []byte, ok bool) {
 	for i := 0; i+1 < len(b); i++ {
 		if b[i] != sof {
 			continue
@@ -151,7 +157,7 @@ func pingResponse(b []byte) (payload []byte, ok bool) {
 		if checksum(frame[:len(frame)-1]) != frame[len(frame)-1] {
 			continue // not a frame boundary after all; keep looking from the next byte
 		}
-		if frame[2] == typeSRSP<<5|subsystemSYS && frame[3] == commandPing {
+		if frame[2] == typ<<5|subsystem && frame[3] == id {
 			return frame[headerLen : headerLen+length], true
 		}
 		i = end - 1 // a real frame, but not ours: step over it whole

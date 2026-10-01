@@ -70,10 +70,10 @@ One binary, five parts, no plugin system and no transport abstraction.
    the clients' 15 s, and takeover of a stale connection by a new one.
 3. **pipe** — the copy between the two: **back-pressured, never lossy, byte-transparent**.
 4. **discovery** — advertises `_zigbee-coordinator._tcp` with the TXT contract below.
-5. **management** — what does not ride the byte stream: the liveness probe and the **report
-   card**, the one place that reaches across components to answer "how is this going". The card is
-   JSON on a unix socket, rendered by `briard-tether status`; fields may be added, never
-   repurposed or removed.
+5. **management** — what does not ride the byte stream: the liveness probe, the **radio
+   restart**, and the **report card**, the one place that reaches across components to answer
+   "how is this going". The card is JSON on a unix socket, rendered by `briard-tether status`;
+   fields may be added, never repurposed or removed.
 
 The boundaries are ordinary Go packages, not interfaces.
 
@@ -117,7 +117,8 @@ The guarantees. The code cites them by number; ★ marks the test-enforced ones.
    ZNP and ASH frames. Nothing in the data path inspects, rewrites, or reframes.
 7. **DTR and RTS are pinned, not toggled** — except RTS on the adapter rows that use hardware flow
    control, where the kernel drives it exactly as those adapters' own clients do. Otherwise the
-   lines move only on an explicit verb. "Never asserted on open" is impossible on Linux (the tty
+   lines move only on an explicit verb — `restart`, which lowers and raises DTR and nothing
+   else. "Never asserted on open" is impossible on Linux (the tty
    layer raises both in `open()`), so the guarantee is the achievable one: **one assert per plug
    event, none across tether's own lifecycle**, bought by clearing `HUPCL`. That edge lands just
    after the plug has power-cycled the radio anyway. Windows needs none of this: the DCB sets line
@@ -213,7 +214,9 @@ so with nobody attached a wedged-but-enumerated dongle gives no signal at all.
 ping is five bytes each way, whereas an EZSP query needs ASH first — a protocol stack, not a probe.
 EZSP and deCONZ health is whatever the card sees from outside the bytes. **The probe and a client
 are mutually exclusive**: a probe is refused while a client is attached, and a client arriving
-mid-probe waits for it, briefly, so it is never handed an answer it did not ask for.
+mid-probe waits for it, briefly, so it is never handed an answer it did not ask for. The restart
+rides the same machinery and reads one frame through it, the `SYS ResetInd` that proves the radio
+booted (see Restarting the radio).
 
 **2. The frame census.** A **passive count** of ZNP frames in both directions, which turns "the
 transport is probably fine" into evidence. Its fence:
@@ -227,9 +230,12 @@ transport is probably fine" into evidence. Its fence:
   is the diagnostic); bytes that did not parse; **`SYS ResetInd`** with its reason; **`RPCError
   CommandNotRecognized`** with its code. Adding to it is a decision.
 
-`ResetInd` with reason `External` means something pulled the reset line — what INV 1 and INV 7
-forbid, made falsifiable on every machine. `CommandNotRecognized` means bytes arrived corrupted,
-which is what a telnet-mode ser2net causes.
+`ResetInd` with reason `External` means something pulled the reset line, on radios that report a
+pin reset that way — what INV 1 and INV 7 forbid, made falsifiable. ⚠️ The CC2652P does not: a
+pulled reset line reports `power-up`, measured on the Sonoff ZBDongle-P, so on that radio a reset
+behind tether's back counts as a power-up, told apart from a real one only by the adapter
+never having left. `CommandNotRecognized`
+means bytes arrived corrupted, which is what a telnet-mode ser2net causes.
 
 ⚠️ **Unframed bytes alone are not corruption.** A healthy session produces them: zigpy's 256-byte
 `0xEF` skip-bootloader burst, and one `0x00` from the radio per power-up. A count climbing with no
@@ -239,6 +245,29 @@ connects or resets behind it is the signal.
 reply to wait; a local reply arrives in milliseconds while a client spends about a second booting;
 and a drain long enough to matter would swallow device reports that only per-frame state could
 tell apart.
+
+## Restarting the radio
+
+**`briard-tether restart` is wedge recovery.** A radio can stop answering while still enumerated,
+and nothing but a reset or a replug cures that. Healthy radios never need it — clients recover in
+band — and over TCP a client cannot pull a reset line of its own, so this is that line.
+
+- **Refused while a client is attached.** tether cannot know whether the client is wedged too or
+  in the middle of something, and whoever asked can stop it first (INV 1 from the other side).
+- **Per adapter, and only where measured.** Which line reaches the radio's reset pin is a property
+  of the board, and the line that resets one board is the bootloader line on another. Today that
+  is the **Sonoff ZBDongle-P**: DTR lowered with RTS left raised holds the radio in reset, and
+  raising it again lets it boot. Every other adapter refuses, and a replug is the restart that
+  always works.
+- **Confirmed, not assumed.** The radio announces its boot with a `SYS ResetInd` about two seconds
+  after the line rises. Only that counts, and a ping after it puts a fresh answer on the card. A
+  pulse with no announcement is a failure: it looks exactly like a reset line wired somewhere else.
+- **A client arriving mid-restart waits for all of it.** The radio answers nothing while it boots,
+  so cutting in would buy the client only the announcement meant for the restart.
+
+**Flashing is not tether's.** The stick can always be reached directly: stop the service, run the
+vendor's flasher against the tty, start the service again. Nothing about that is improved by
+going through tether, and a wrapper would couple tether to every flasher's release cycle.
 
 ## Configuration
 
@@ -278,8 +307,10 @@ socket directories of the machine it runs on.
 `$XDG_RUNTIME_DIR/tether` for a user one. Two dongles mean two tethers, and the pid keeps them from
 colliding; `briard-tether status -pid` picks one and, with several running, it lists them rather
 than choosing. Readers search both locations and skip — never delete — a socket nothing answers on.
-The socket is mode `0666`: the card is read-only and everything on it is already in the log. A
-user-scope card stays private anyway, because its directory is `0700`.
+**The socket is mode `0600`**, because it also takes `restart`: whoever can connect can reset the
+radio. So an ordinary user asking about a system tether is told to use `sudo`, rather than that
+no tether is running. Every connection gets the card first; a reader that wants nothing more
+closes, and `restart` is a line written after it, answered with one JSON result.
 
 ## Packaging, and the service
 
@@ -417,7 +448,7 @@ internal/server/       one TCP listener, one client, kick-old takeover
 internal/pipe/         the back-pressured copy, the frame census, probe arbitration
 internal/discovery/    the mDNS advert, the TXT record, interface selection
 internal/family/       the adapter table and its drift check against zigbee-herdsman
-internal/management/   the liveness probe, the report card, the status socket
+internal/management/   the liveness probe, the radio restart, the report card, the status socket
 tests/                 the client gates, all runnable with no hardware
 scripts/               the wire-test namespace, the pre-commit hook
 ```

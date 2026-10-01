@@ -146,6 +146,33 @@ func (p *Port) SuspendedTime() (time.Duration, error) {
 	return runtimeSuspended(p.path)
 }
 
+// resetHold is how long the radio is held in reset. Ten milliseconds is enough on the measured
+// stick; this is a margin over that and over the USB control transfer that carries each edge,
+// and nothing waits on it but the verb's own caller.
+const resetHold = 100 * time.Millisecond
+
+// Restart resets the radio by the adapter's measured method, and returns once the reset line
+// is released — the radio is booting, not booted. It is the one place a control line is moved
+// on purpose (INV 7), and only the restart verb reaches it.
+//
+// It leaves the lines where it found them. A failure to raise DTR again leaves the radio held
+// in reset, and the error says so in as many words: the radio will answer nothing until DTR
+// rises or the adapter is replugged.
+func (p *Port) Restart(how family.Restart) error {
+	if how != family.RestartDTR {
+		return errors.New("no restart is known for this adapter")
+	}
+	if err := p.port.SetDTR(false); err != nil {
+		return fmt.Errorf("lowering DTR: %w", classify(err, p.closed.Load()))
+	}
+	time.Sleep(resetHold)
+	if err := p.port.SetDTR(true); err != nil {
+		return fmt.Errorf("raising DTR again failed, and the radio stays held in reset until "+
+			"the adapter is replugged: %w", classify(err, p.closed.Load()))
+	}
+	return nil
+}
+
 // classify maps a driver or library error onto ErrGone where it means the device left.
 // Everything else passes through unchanged — guessing wrongly in either direction costs more
 // than the distinction is worth.

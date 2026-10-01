@@ -234,3 +234,36 @@ func TestDeviceLabel(t *testing.T) {
 		}
 	}
 }
+
+// The restart table is keyed by name, so a row renamed under it would silently lose its
+// restart. Every key must still be a name the table gives out.
+func TestEveryRestartNamesARow(t *testing.T) {
+	names := map[string]bool{}
+	for _, r := range table {
+		names[r.name] = true
+	}
+	for name := range restarts {
+		if !names[name] {
+			t.Errorf("restarts has %q, which no row is called", name)
+		}
+	}
+}
+
+// The measured stick has a restart, and its EZSP sibling sharing the same ids and the words
+// "dongle plus" does not inherit it — the line that resets one board may be the bootloader
+// line on the other.
+func TestRestartIsPerAdapter(t *testing.T) {
+	if got := RestartOf(sonoffP); got != RestartDTR {
+		t.Errorf("RestartOf(the ZBDongle-P) = %q, want %q", got, RestartDTR)
+	}
+	e := Device{
+		Vendor: "10c4", Product: "ea60",
+		Manufacturer: "ITEAD", Name: "Sonoff Zigbee 3.0 USB Dongle Plus V2",
+	}
+	if got := RestartOf(e); got != NoRestart {
+		t.Errorf("RestartOf(the ZBDongle-E) = %q, want none", got)
+	}
+	if got := RestartOf(Device{Vendor: "dead", Product: "beef"}); got != NoRestart {
+		t.Errorf("RestartOf(an unknown stick) = %q, want none", got)
+	}
+}

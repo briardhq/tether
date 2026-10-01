@@ -478,3 +478,58 @@ func TestStatsRecordWhenEachSideLastSpoke(t *testing.T) {
 		t.Error("the device stamp moved when only the client spoke")
 	}
 }
+
+// A restart outlasts the two seconds a client otherwise waits for an exchange: the radio boots
+// for about that long and then announces it. A client arriving in the middle must wait for the
+// announcement rather than cut in at the backstop, or the reset indication that confirms the
+// restart is handed to the client instead — a frame it never caused, and a restart reported as
+// failed.
+func TestAttachWaitsOutAnActLongerThanTheBackstop(t *testing.T) {
+	dev := newBlockingDev()
+	defer close(dev.reads)
+	p := New(nil)
+	p.Serve(dev)
+
+	announce := []byte{0xFE, 0x06, 0x41, 0x80, 0x00, 0x02, 0x01, 0x02, 0x07, 0x01, 0xC0}
+	acted := make(chan struct{})
+	result := make(chan []byte, 1)
+	go func() {
+		got, err := p.Act(func() error { close(acted); return nil },
+			func(b []byte) bool { return len(b) >= len(announce) }, 2*maxExchangeWait)
+		if err != nil {
+			t.Errorf("Act: %v", err)
+		}
+		result <- got
+	}()
+	<-acted
+
+	attached := make(chan struct{})
+	client, server := net.Pipe()
+	defer client.Close()
+	go func() {
+		p.Attach(server)
+		close(attached)
+	}()
+
+	// Past the backstop, and the act still has not heard from the radio.
+	select {
+	case <-attached:
+		t.Fatal("Attach cut into the act before the radio announced anything")
+	case <-time.After(maxExchangeWait + 250*time.Millisecond):
+	}
+
+	dev.reads <- announce
+	if got := <-result; len(got) != len(announce) {
+		t.Errorf("the act collected % x, want % x", got, announce)
+	}
+	select {
+	case <-attached:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Attach never returned after the act finished")
+	}
+	client.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+	var buf [16]byte
+	if n, _ := client.Read(buf[:]); n > 0 {
+		t.Errorf("the client was handed %d bytes of the act's reply: % x", n, buf[:n])
+	}
+}

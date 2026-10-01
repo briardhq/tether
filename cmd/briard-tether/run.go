@@ -177,7 +177,7 @@ func locate(opts Options) (target, error) {
 		case 0:
 			return target{}, errors.New("no compatible adapter is attached")
 		case 1:
-			path, params, name = found[0].Path, found[0].Params, found[0].Name
+			path, params, name, usb = found[0].Path, found[0].Params, found[0].Name, found[0].Device
 		default:
 			return target{}, ambiguous(found)
 		}
@@ -298,7 +298,11 @@ func hold(ctx context.Context, opts Options, p *pipe.Pipe, m *management.Monitor
 				at.path, at.params.Radio, radio)
 		}
 		radio = at.params.Radio
-		m.DeviceOpened(radio, port.SuspendedTime)
+		var restart func() error
+		if how := family.RestartOf(at.usb); how != family.NoRestart {
+			restart = func() error { return port.Restart(how) }
+		}
+		m.DeviceOpened(radio, port.SuspendedTime, restart)
 
 		err = generation(ctx, opts, at, p, port, m)
 

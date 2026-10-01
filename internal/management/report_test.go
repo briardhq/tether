@@ -28,7 +28,7 @@ func TestStatusSocketAnswersWithTheCard(t *testing.T) {
 
 	m := NewMonitor(p, nil)
 
-	m.DeviceOpened(family.ZNP, nil)
+	m.DeviceOpened(family.ZNP, nil, nil)
 	if _, err := m.Probe(); err != nil {
 		t.Fatalf("probing: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestASilentRadioIsRecordedAsAFailedProbe(t *testing.T) {
 
 	m := NewMonitor(p, nil)
 
-	m.DeviceOpened(family.ZNP, nil)
+	m.DeviceOpened(family.ZNP, nil, nil)
 	if card := m.Card(); card.Probe != nil {
 		t.Fatalf("a monitor that has not probed reports %+v", card.Probe)
 	}
@@ -121,7 +121,7 @@ func TestABusyDeviceDoesNotOverwriteTheLastProbe(t *testing.T) {
 
 	m := NewMonitor(p, nil)
 
-	m.DeviceOpened(family.ZNP, nil)
+	m.DeviceOpened(family.ZNP, nil, nil)
 	if _, err := m.Probe(); err != nil {
 		t.Fatalf("the first probe: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestASuspendWhileHeldRaisesTheAlarm(t *testing.T) {
 	counter := 5 * time.Second
 	read := func() (time.Duration, error) { return counter, nil }
 
-	m.DeviceOpened(family.EZSP, read)
+	m.DeviceOpened(family.EZSP, read, nil)
 	m.checkSuspend()
 	card := m.Card()
 	if card.SuspendedMs == nil || *card.SuspendedMs != 0 {
@@ -180,7 +180,7 @@ func TestASuspendWhileHeldRaisesTheAlarm(t *testing.T) {
 	m.NoDevice("the device stopped")
 	counter = 100 * time.Millisecond
 	m.checkSuspend()
-	m.DeviceOpened(family.EZSP, read)
+	m.DeviceOpened(family.EZSP, read, nil)
 	counter += 50 * time.Millisecond
 	m.checkSuspend()
 	if got := *m.Card().SuspendedMs; got != 350 {
@@ -196,7 +196,7 @@ func TestNoSuspendCounterLeavesTheFieldAbsent(t *testing.T) {
 	p.Serve(radio)
 	m := NewMonitor(p, nil)
 
-	m.DeviceOpened(family.EZSP, func() (time.Duration, error) { return 0, errors.ErrUnsupported })
+	m.DeviceOpened(family.EZSP, func() (time.Duration, error) { return 0, errors.ErrUnsupported }, nil)
 	m.checkSuspend()
 	if got := m.Card().SuspendedMs; got != nil {
 		t.Errorf("an unwatched adapter reports %d ms suspended, want the field absent", *got)
@@ -212,7 +212,7 @@ func TestAnUnprobedFamilyReportsNoProbeRatherThanAFailure(t *testing.T) {
 
 	m := NewMonitor(p, nil)
 
-	m.DeviceOpened(family.EZSP, nil)
+	m.DeviceOpened(family.EZSP, nil, nil)
 	ctx, stop := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer stop()
 	m.Run(ctx, 50*time.Millisecond, time.Hour)
@@ -240,7 +240,7 @@ func TestAProbeLeavesTheCensusUntouched(t *testing.T) {
 	p := pipe.New(census.Observe)
 	m := NewMonitor(p, census)
 	p.Serve(radio)
-	m.DeviceOpened(family.ZNP, nil)
+	m.DeviceOpened(family.ZNP, nil, nil)
 
 	if _, err := m.Probe(); err != nil {
 		t.Fatalf("probing: %v", err)
@@ -289,7 +289,7 @@ func TestTheCensusCountsWhatCrossesThePipeWithoutAlteringIt(t *testing.T) {
 	// for when the device opens, and the device opens before any listener exists (INV 2). A
 	// client cannot therefore send a frame the census was not yet switched on for.
 	p.Serve(radio)
-	m.DeviceOpened(family.ZNP, nil)
+	m.DeviceOpened(family.ZNP, nil, nil)
 
 	client, server := net.Pipe()
 	defer client.Close()
