@@ -46,7 +46,7 @@ func main() {
 		os.Exit(runVerb(os.Args[2:]))
 	case "status":
 		os.Exit(statusVerb(os.Stdout, os.Stderr, management.SocketDirs(), os.Args[2:]))
-	case "restart":
+	case "restart-adapter":
 		os.Exit(restartVerb(os.Stdout, os.Stderr, management.SocketDirs(), os.Args[2:]))
 	case "install":
 		os.Exit(installVerb(os.Stdout, os.Stderr, os.Stdin, os.Args[2:]))
@@ -156,13 +156,13 @@ func misdirected(verb string) string {
 func usage(w io.Writer) {
 	fmt.Fprintf(w, "briard-tether — a USB Zigbee coordinator, served over the network\n\n")
 	fmt.Fprintf(w, "usage:\n")
-	fmt.Fprintf(w, "  briard-tether run [-config <path>]   serve the adapter, and advertise it\n")
-	fmt.Fprintf(w, "  briard-tether status [-pid <id>]     what a running tether says about itself\n")
-	fmt.Fprintf(w, "  briard-tether restart [-pid <id>]    reset a radio that has stopped answering\n")
-	fmt.Fprintf(w, "  briard-tether install                install the service and start it\n")
-	fmt.Fprintf(w, "  briard-tether uninstall              stop it and remove what install wrote\n")
-	fmt.Fprintf(w, "  briard-tether version                which build this is\n")
-	fmt.Fprintf(w, "  briard-tether help                   this page\n\n")
+	fmt.Fprintf(w, "  briard-tether run [-config <path>]         serve the adapter, and advertise it\n")
+	fmt.Fprintf(w, "  briard-tether status [-pid <id>]           what a running tether says about itself\n")
+	fmt.Fprintf(w, "  briard-tether restart-adapter [-pid <id>]  reset a radio that has stopped answering\n")
+	fmt.Fprintf(w, "  briard-tether install                      install the service and start it\n")
+	fmt.Fprintf(w, "  briard-tether uninstall                    stop it and remove what install wrote\n")
+	fmt.Fprintf(w, "  briard-tether version                      which build this is\n")
+	fmt.Fprintf(w, "  briard-tether help                         this page\n\n")
 
 	fmt.Fprintf(w, "config, the first of these that exists — and none is the normal install,\n")
 	fmt.Fprintf(w, "which means: find the adapter, listen on %s, advertise it\n", defaultListen)
@@ -215,7 +215,7 @@ func statusVerb(out, errOut io.Writer, dirs []string, args []string) int {
 // It is wedge recovery, not maintenance: the clients recover a healthy radio in band, and a
 // running tether refuses while one is attached.
 func restartVerb(out, errOut io.Writer, dirs []string, args []string) int {
-	flags := flag.NewFlagSet("restart", flag.ContinueOnError)
+	flags := flag.NewFlagSet("restart-adapter", flag.ContinueOnError)
 	flags.SetOutput(errOut)
 	pid := flags.Int("pid", 0, "which tether to ask, when more than one is running on this host")
 	if err := flags.Parse(args); err != nil {
@@ -224,16 +224,16 @@ func restartVerb(out, errOut io.Writer, dirs []string, args []string) int {
 
 	peer, err := management.FindPeer(dirs, *pid)
 	if err != nil {
-		fmt.Fprintf(errOut, "briard-tether restart: %v\n", err)
+		fmt.Fprintf(errOut, "briard-tether restart-adapter: %v\n", err)
 		return 1
 	}
 	result, err := management.RequestRestart(peer.Path)
 	if err != nil {
-		fmt.Fprintf(errOut, "briard-tether restart: %v\n", err)
+		fmt.Fprintf(errOut, "briard-tether restart-adapter: %v\n", err)
 		return 1
 	}
 	if !result.OK {
-		fmt.Fprintf(errOut, "briard-tether restart: %s\n", result.Error)
+		fmt.Fprintf(errOut, "briard-tether restart-adapter: %s\n", result.Error)
 		return 1
 	}
 	fmt.Fprintf(out, "restarted — the radio announced a %s boot %.0f ms after the reset\n",

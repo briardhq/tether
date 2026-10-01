@@ -264,7 +264,7 @@ func report(out io.Writer, system bool, unitPath, source, binary string, copied,
 
 	if system {
 		fmt.Fprintf(out, "as          root — the one thing on this machine that needs it is keeping the\n")
-		fmt.Fprintf(out, "            adapter out of USB runtime suspend; `status` and `restart` want sudo\n")
+		fmt.Fprintf(out, "            adapter out of USB runtime suspend; `status`, `restart-adapter` want sudo\n")
 		fmt.Fprintf(out, "rule        %s — %d adapter ids kept out of USB runtime suspend\n",
 			udevRulePath, len(family.IDs()))
 		fmt.Fprintf(out, "            it applies when a device appears, so replug an adapter that is already\n")

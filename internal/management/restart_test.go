@@ -3,7 +3,9 @@ package management
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -85,20 +87,41 @@ func TestARestartTheRadioDoesNotAnnounceIsAFailure(t *testing.T) {
 	}
 }
 
-// INV 1 from the other side: a client on the radio is never reset out from under, and the
-// refusal comes before anything touches the line.
-func TestARestartRefusesWhileAClientIsAttached(t *testing.T) {
-	m, p, pulled := restartRig(t, family.ZNP, true)
+// A client on the radio is closed, not refused — and closed before the line moves, so it is
+// never left talking to a radio that has gone quiet under it. To the client that close is an
+// unplug, which it already recovers from.
+func TestARestartClosesTheClientBeforeTouchingTheLine(t *testing.T) {
+	fake := newFakeRadio(answersPings)
+	t.Cleanup(fake.stop)
+	p := pipe.New(nil)
+	p.Serve(fake)
+
 	client, server := net.Pipe()
 	defer client.Close()
 	p.Attach(server)
 
-	got := m.Restart()
-	if got.OK || !strings.Contains(got.Error, "client is attached") {
-		t.Errorf("Restart with a client attached = %+v, want a refusal naming the client", got)
+	var openWhenPulled bool
+	m := NewMonitor(p, nil)
+	m.DeviceOpened(family.ZNP, nil, func() error {
+		openWhenPulled = p.Stats().Client != ""
+		fake.out <- bootAnnouncement
+		return nil
+	})
+
+	if got := m.Restart(); !got.OK {
+		t.Fatalf("Restart with a client attached failed: %s", got.Error)
 	}
-	if n := pulled.Load(); n != 0 {
-		t.Errorf("the reset line was pulled %d times under a client", n)
+	if openWhenPulled {
+		t.Error("the reset line moved while the client was still attached")
+	}
+	// The client's end is closed: its next read ends rather than waiting.
+	_ = client.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := client.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("the client was not closed: read returned %v", err)
+	}
+	if s := p.Stats(); s.Disconnects != 1 || !strings.Contains(s.LastEvent, "radio restart") {
+		t.Errorf("the close was recorded as %d disconnects, last %q; want one, saying why",
+			s.Disconnects, s.LastEvent)
 	}
 }
 

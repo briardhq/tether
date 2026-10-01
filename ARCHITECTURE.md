@@ -117,7 +117,7 @@ The guarantees. The code cites them by number; ★ marks the test-enforced ones.
    ZNP and ASH frames. Nothing in the data path inspects, rewrites, or reframes.
 7. **DTR and RTS are pinned, not toggled** — except RTS on the adapter rows that use hardware flow
    control, where the kernel drives it exactly as those adapters' own clients do. Otherwise the
-   lines move only on an explicit verb — `restart`, which lowers and raises DTR and nothing
+   lines move only on an explicit verb — `restart-adapter`, which lowers and raises DTR and nothing
    else. "Never asserted on open" is impossible on Linux (the tty
    layer raises both in `open()`), so the guarantee is the achievable one: **one assert per plug
    event, none across tether's own lifecycle**, bought by clearing `HUPCL`. That edge lands just
@@ -248,17 +248,22 @@ tell apart.
 
 ## Restarting the radio
 
-**`briard-tether restart` is wedge recovery.** A radio can stop answering while still enumerated,
-and nothing but a reset or a replug cures that. Healthy radios never need it — clients recover in
-band — and over TCP a client cannot pull a reset line of its own, so this is that line.
+**`briard-tether restart-adapter` is wedge recovery.** A radio can stop answering while still
+enumerated, and nothing but a reset or a replug cures that. Healthy radios never need it —
+clients recover in band — and over TCP a client cannot pull a reset line of its own, so this is
+that line.
 
-- **Refused while a client is attached.** tether cannot know whether the client is wedged too or
-  in the middle of something, and whoever asked can stop it first (INV 1 from the other side).
+- **The client is closed first, not refused.** It is on a radio about to stop answering, and to
+  it the close is an unplug, which both clients already recover from (INV 3). The reset line does
+  not move until the client's reader has stopped. Refusing would leave whoever asked to stop the
+  client by hand — the same reasoning that makes a new client displace an old one (INV 4).
 - **Per adapter, and only where measured.** Which line reaches the radio's reset pin is a property
   of the board, and the line that resets one board is the bootloader line on another. Today that
   is the **Sonoff ZBDongle-P**: DTR lowered with RTS left raised holds the radio in reset, and
-  raising it again lets it boot. Every other adapter refuses, and a replug is the restart that
-  always works.
+  raising it again lets it boot — the same state zigpy-znp and zigbee-herdsman use to reset a TI
+  stick over serial. Every other adapter refuses, and a replug is the restart that always works.
+  On the **Connect ZBT-2** neither line reaches the radio at all: it answers normally with either
+  or both held low.
 - **Confirmed, not assumed.** The radio announces its boot with a `SYS ResetInd` about two seconds
   after the line rises. Only that counts, and a ping after it puts a fresh answer on the card. A
   pulse with no announcement is a failure: it looks exactly like a reset line wired somewhere else.
@@ -307,10 +312,10 @@ socket directories of the machine it runs on.
 `$XDG_RUNTIME_DIR/tether` for a user one. Two dongles mean two tethers, and the pid keeps them from
 colliding; `briard-tether status -pid` picks one and, with several running, it lists them rather
 than choosing. Readers search both locations and skip — never delete — a socket nothing answers on.
-**The socket is mode `0600`**, because it also takes `restart`: whoever can connect can reset the
+**The socket is mode `0600`**, because it also takes `restart-adapter`: whoever can connect can reset the
 radio. So an ordinary user asking about a system tether is told to use `sudo`, rather than that
 no tether is running. Every connection gets the card first; a reader that wants nothing more
-closes, and `restart` is a line written after it, answered with one JSON result.
+closes, and `restart-adapter` is a line written after it, answered with one JSON result.
 
 ## Packaging, and the service
 

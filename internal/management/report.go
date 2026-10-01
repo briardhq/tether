@@ -464,7 +464,7 @@ func (c Card) Summary() string {
 
 // ServeStatus answers `tether status` on a unix socket until ctx ends, and takes the restart
 // verb on the same socket. Every connection is handed the card first; a reader that wants
-// nothing more closes, and one that wants a restart writes `restart` on a line of its own and
+// nothing more closes, and one that wants a restart writes `restart-adapter` on a line of its own and
 // reads one RestartResult back. That is the whole protocol, and a plain status reader never
 // sees any of it.
 //
@@ -538,10 +538,10 @@ func (m *Monitor) answer(conn net.Conn) {
 	}
 	var result RestartResult
 	switch command := strings.TrimSpace(line); command {
-	case "restart":
+	case "restart-adapter":
 		result = m.Restart()
 	default:
-		result = failed(fmt.Sprintf("%q is not something tether does; the one command is restart", command))
+		result = failed(fmt.Sprintf("%q is not something tether does; the one command is restart-adapter", command))
 	}
 	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	if err := json.NewEncoder(conn).Encode(result); err != nil {
@@ -566,7 +566,7 @@ func RequestRestart(path string) (RestartResult, error) {
 	if err := dec.Decode(&card); err != nil {
 		return RestartResult{}, fmt.Errorf("reading the status from %s: %w", path, err)
 	}
-	if _, err := io.WriteString(conn, "restart\n"); err != nil {
+	if _, err := io.WriteString(conn, "restart-adapter\n"); err != nil {
 		return RestartResult{}, fmt.Errorf("asking %s for a restart: %w", path, err)
 	}
 	var result RestartResult

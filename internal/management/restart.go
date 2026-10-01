@@ -39,9 +39,9 @@ type RestartResult struct {
 // that has stopped answering while still enumerated, which nothing but a reset or a replug
 // cures. Normal operation never needs it — clients recover in band.
 //
-// It refuses while a client is attached rather than resetting the radio under it. The client
-// is the one thing that would notice, and the person who asked can stop it first; what tether
-// cannot do is know whether the client is wedged too or in the middle of something.
+// A client attached is closed first rather than refused (pipe.Act): it is on a radio that is
+// about to stop answering, and to it the close is an unplug, which it already recovers from.
+// Refusing would leave whoever asked to stop the client by hand.
 //
 // The restart is confirmed rather than assumed. A radio that took the reset announces its boot
 // with a SYS ResetInd, and only that counts: a pulse with no announcement after it is reported
@@ -66,7 +66,7 @@ func (m *Monitor) Restart() RestartResult {
 
 	log.Printf("management: restarting the radio, as asked")
 	result := m.restartOnce(act)
-	if result.Error == errBusyNoClient {
+	if result.Error == errBusy {
 		time.Sleep(busyRetry)
 		result = m.restartOnce(act)
 	}
@@ -88,9 +88,9 @@ func (m *Monitor) Restart() RestartResult {
 	return result
 }
 
-// errBusyNoClient is the one refusal worth a second try: the device is busy and no client
-// holds it, which is the probe.
-const errBusyNoClient = "the device is busy with another out-of-band exchange"
+// errBusy is the one refusal worth a second try: another exchange holds the device, which is
+// the probe, and a probe is over in well under a second.
+const errBusy = "the device is busy with another out-of-band exchange"
 
 func (m *Monitor) restartOnce(act func() error) RestartResult {
 	var released time.Time
@@ -107,11 +107,7 @@ func (m *Monitor) restartOnce(act func() error) RestartResult {
 
 	switch {
 	case errors.Is(err, pipe.ErrBusy):
-		if client := m.pipe.Stats().Client; client != "" {
-			return failed(fmt.Sprintf("a client is attached (%s), and tether does not reset a "+
-				"radio under its client; stop the client first", client))
-		}
-		return failed(errBusyNoClient)
+		return failed(errBusy)
 	case err != nil:
 		return failed(err.Error())
 	}

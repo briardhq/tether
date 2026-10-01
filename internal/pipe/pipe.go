@@ -521,17 +521,23 @@ func (p *Pipe) Exchange(req []byte, complete func([]byte) bool, timeout time.Dur
 			return fmt.Errorf("writing an out-of-band request: %w", err)
 		}
 		return nil
-	}, complete, timeout)
+	}, complete, timeout, false)
 }
 
 // Act is Exchange for a request that is not bytes: act does something to the radio out of
 // band — pulls its reset line — and what the radio says afterwards is collected exactly as an
-// answer would be, under the same exclusion. Nothing is written to the device.
+// answer would be. Nothing is written to the device.
+//
+// Unlike Exchange it does not refuse a client: it closes it first, and waits for its reader to
+// stop before acting. An act is somebody asking for the radio to be reset, and the client is on
+// a radio that is about to stop answering anyway; to it the close is an unplug, which is a
+// recovery both clients already make (INV 3). Refusing would leave whoever asked to go and stop
+// the client by hand. It still refuses another exchange in flight.
 func (p *Pipe) Act(act func() error, complete func([]byte) bool, timeout time.Duration) ([]byte, error) {
-	return p.exchange(func(io.Writer) error { return act() }, complete, timeout)
+	return p.exchange(func(io.Writer) error { return act() }, complete, timeout, true)
 }
 
-func (p *Pipe) exchange(send func(io.Writer) error, complete func([]byte) bool, timeout time.Duration) ([]byte, error) {
+func (p *Pipe) exchange(send func(io.Writer) error, complete func([]byte) bool, timeout time.Duration, closeClient bool) ([]byte, error) {
 	ex := &exchange{
 		complete: complete,
 		replied:  make(chan struct{}),
@@ -540,7 +546,7 @@ func (p *Pipe) exchange(send func(io.Writer) error, complete func([]byte) bool, 
 	}
 
 	p.mu.Lock()
-	if p.cur != nil || p.ex != nil {
+	if p.ex != nil || p.cur != nil && !closeClient {
 		p.mu.Unlock()
 		return nil, ErrBusy
 	}
@@ -552,7 +558,17 @@ func (p *Pipe) exchange(send func(io.Writer) error, complete func([]byte) bool, 
 		p.mu.Unlock()
 		return nil, errNoDevice
 	}
+	// Registered before the client is closed, so that from here the radio's bytes come to
+	// the exchange and a client reconnecting at once waits for it rather than attaching.
 	p.ex = ex
+	old := p.cur
+	if old != nil {
+		// Counted here as the disconnect it is, with its reason; marking it displaced stops
+		// its own reader counting it a second time as a client that left.
+		old.displaced = true
+		p.disconnects++
+		p.note(old.conn.RemoteAddr().String() + " closed for a radio restart")
+	}
 	p.mu.Unlock()
 
 	defer func() {
@@ -561,6 +577,14 @@ func (p *Pipe) exchange(send func(io.Writer) error, complete func([]byte) bool, 
 		p.mu.Unlock()
 		close(ex.finished)
 	}()
+
+	if old != nil {
+		log.Printf("pipe: closing %s — the radio is being restarted", old.conn.RemoteAddr())
+		old.conn.Close()
+		// Its reader may be mid-write to the UART; nothing is done to the radio until it
+		// has stopped (INV 4).
+		<-old.done
+	}
 
 	if err := send(dev); err != nil {
 		return nil, err
