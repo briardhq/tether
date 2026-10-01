@@ -252,6 +252,17 @@ func render(out io.Writer, card management.Card) {
 			fmt.Fprintf(out, "            %s\n", card.DeviceAbsentReason)
 		}
 	}
+	// Printed at zero too, like the resets below: "never suspended while held" is a claim worth
+	// being able to make. Absent only where the platform has no counter to read.
+	if card.SuspendedMs != nil {
+		if *card.SuspendedMs == 0 {
+			fmt.Fprintf(out, "suspend     never while held\n")
+		} else {
+			fmt.Fprintf(out, "suspend     USB SUSPENDED %v while held, last %v ago — "+
+				"autosuspend is on for this adapter; see the log\n",
+				time.Duration(*card.SuspendedMs)*time.Millisecond, card.Now.Sub(card.SuspendedAt).Round(time.Second))
+		}
+	}
 
 	// Ages, not timestamps: the question being asked here is "is it still happening", and a
 	// reader should not have to subtract two clocks to answer it.

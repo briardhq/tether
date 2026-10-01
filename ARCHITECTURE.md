@@ -34,7 +34,7 @@ failure classes sink ser2net setups, and each gets one owned mechanism:
 | --- | --- |
 | **1. Config assembly** — baud, flow control, telnet-vs-raw, `ttyUSB0` renumbering, adapter type | the family table (which also *finds* the adapter), by-id paths, and the TXT record as the single source of truth |
 | **2. Lifecycle** — stale connection locks, boot-order races, silent stalls | one client with **kick-old takeover**, open-on-demand with retry, keepalive, **fail-loud close** |
-| **3. Load-dependent data path** — flow-control mismatch, USB autosuspend | per-family flow control, `TCP_NODELAY`, autosuspend disabled, a back-pressured pipe |
+| **3. Load-dependent data path** — flow-control mismatch, USB autosuspend | per-family flow control, `TCP_NODELAY`, autosuspend disabled (and a suspend that happens anyway while the port is held, raised on the card and in the log), a back-pressured pipe |
 | **4. Beneath the bridge** — firmware, RF, USB itself | not fixable, but **exonerable**: a liveness probe and link metrics that place the fault away from the transport |
 
 The honest residual: an SLZB's radio UART is soldered chip-to-chip, while ours crosses USB. That

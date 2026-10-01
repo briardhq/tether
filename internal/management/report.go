@@ -95,6 +95,14 @@ type Card struct {
 	// Frames is the census, absent for the families it cannot read. Absent and all-zero say
 	// different things and must not render alike.
 	Frames *FrameCounts `json:"frames,omitempty"`
+
+	// SuspendedMs is how long the adapter has spent in USB runtime suspend *while tether held
+	// it*, summed over every open since start, and SuspendedAt when that was last seen to grow.
+	// Anything above zero is the "works fine, then dies after N minutes" class caught in the
+	// act: a coordinator suspended with its port open cannot announce an inbound frame. Absent
+	// where the platform keeps no suspend counter — absent and zero say different things.
+	SuspendedMs *uint64   `json:"device_suspended_ms,omitempty"`
+	SuspendedAt time.Time `json:"device_suspended_at,omitzero"`
 }
 
 // ProbeReport is the last thing the radio said, and when. Absent while nothing has asked yet,
@@ -131,6 +139,17 @@ type Monitor struct {
 	listen        string
 	openAttempts  uint64
 	absence       string
+
+	// The suspend watch. suspended reads the open adapter's cumulative counter and is nil
+	// while there is none to read; suspendBase is its last reading, so only growth *during*
+	// an open counts — a suspend while nobody held the port is harmless, since the next open
+	// resumes it. generation tells a reading taken across a reopen from a current one.
+	suspended      func() (time.Duration, error)
+	suspendBase    time.Duration
+	suspendWatched bool
+	suspendTotal   time.Duration
+	suspendAt      time.Time
+	generation     uint64
 }
 
 // NewMonitor returns a Monitor over an already-running pipe. census may be nil, and is the same
@@ -177,13 +196,31 @@ func (m *Monitor) Probe() (Result, error) {
 // DeviceOpened records that tether now holds an adapter, and which radio it turned out to be.
 // The radio arrives here rather than at construction because detection is what learns it, and
 // detection happens inside the supervision loop.
-func (m *Monitor) DeviceOpened(radio family.Radio) {
+//
+// suspended reads the adapter's cumulative USB suspend counter, and may be nil. Its first
+// reading is the baseline: what the counter says at open happened while nobody held the port.
+func (m *Monitor) DeviceOpened(radio family.Radio, suspended func() (time.Duration, error)) {
 	m.census.Adopt(radio)
+
+	var base time.Duration
+	if suspended != nil {
+		var err error
+		if base, err = suspended(); err != nil {
+			if !errors.Is(err, errors.ErrUnsupported) {
+				log.Printf("management: cannot watch this adapter for USB autosuspend (%v); "+
+					"a suspend while tether holds it will go unreported", err)
+			}
+			suspended = nil
+		}
+	}
 
 	m.mu.Lock()
 	first := m.radio == ""
 	changed := !first && m.radio != radio
 	m.radio, m.devicePresent, m.absence = radio, true, ""
+	m.generation++
+	m.suspended, m.suspendBase = suspended, base
+	m.suspendWatched = m.suspendWatched || suspended != nil
 	m.mu.Unlock()
 
 	// Said when it is learned rather than at startup, and said once: whether this radio has a
@@ -207,7 +244,48 @@ func (m *Monitor) NoDevice(reason string) {
 	m.mu.Lock()
 	m.devicePresent = false
 	m.absence = reason
+	m.generation++
+	m.suspended = nil
 	m.mu.Unlock()
+}
+
+// checkSuspend reads the suspend counter of the adapter tether holds, and raises the alarm if
+// it grew since the last reading. A read that fails is dropped: it means the device is going
+// away, which the pipe reports on its own.
+func (m *Monitor) checkSuspend() {
+	m.mu.Lock()
+	read, gen := m.suspended, m.generation
+	m.mu.Unlock()
+	if read == nil {
+		return
+	}
+	now, err := read()
+	if err != nil {
+		return
+	}
+
+	m.mu.Lock()
+	if gen != m.generation {
+		m.mu.Unlock()
+		return
+	}
+	grew := now - m.suspendBase
+	m.suspendBase = now
+	if grew > 0 {
+		m.suspendTotal += grew
+		m.suspendAt = time.Now()
+	}
+	total := m.suspendTotal
+	m.mu.Unlock()
+
+	if grew > 0 {
+		log.Printf("management: USB AUTOSUSPEND — the adapter was suspended for %v while tether "+
+			"held it (%v since start); a coordinator asleep under its client cannot announce an "+
+			"inbound frame. Something re-enabled runtime power management for it — powertop "+
+			"--auto-tune, TLP and laptop-mode-tools are the usual ones; set its power/control "+
+			"back to \"on\" and keep that tool off this device",
+			grew, total)
+	}
 }
 
 // CountOpenAttempt records one attempt to open the device, whether or not it worked. Counting
@@ -226,6 +304,12 @@ func (m *Monitor) Card() Card {
 	probe := m.lastProbe
 	radio, present, attempts, absence := m.radio, m.devicePresent, m.openAttempts, m.absence
 	instance, listen := m.instance, m.listen
+	var suspendedMs *uint64
+	if m.suspendWatched {
+		ms := uint64(m.suspendTotal.Milliseconds())
+		suspendedMs = &ms
+	}
+	suspendedAt := m.suspendAt
 	m.mu.Unlock()
 
 	var frames *FrameCounts
@@ -259,6 +343,8 @@ func (m *Monitor) Card() Card {
 		DeviceAbsentReason: absence,
 		Probe:              probe,
 		Frames:             frames,
+		SuspendedMs:        suspendedMs,
+		SuspendedAt:        suspendedAt,
 	}
 }
 
@@ -274,6 +360,9 @@ func (m *Monitor) Run(ctx context.Context, probeEvery, reportEvery time.Duration
 		case <-ctx.Done():
 			return
 		case <-probes.C:
+			// Every family, before the probe's own filter: suspend is a USB matter, not a
+			// protocol one.
+			m.checkSuspend()
 			// Asked each tick rather than once at startup: which radio this is gets learned
 			// when one is found, not when tether starts, and it can change under us if
 			// somebody swaps the dongle for a different family.
@@ -322,6 +411,11 @@ func (c Card) Summary() string {
 		if c.DeviceAbsentReason != "" {
 			s += " — " + c.DeviceAbsentReason
 		}
+	}
+	// Only when nonzero, and shouting, for the same reason as NO DEVICE above.
+	if c.SuspendedMs != nil && *c.SuspendedMs > 0 {
+		s += fmt.Sprintf(", USB SUSPENDED %v WHILE HELD (last %v ago)",
+			time.Duration(*c.SuspendedMs)*time.Millisecond, c.Now.Sub(c.SuspendedAt).Round(time.Second))
 	}
 	if !c.LastDeviceByteAt.IsZero() {
 		s += fmt.Sprintf(", radio last spoke %v ago", c.Now.Sub(c.LastDeviceByteAt).Round(time.Second))

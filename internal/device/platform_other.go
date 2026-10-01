@@ -4,6 +4,7 @@ package device
 
 import (
 	"errors"
+	"time"
 
 	"briard.io/tether/internal/family"
 )
@@ -19,6 +20,8 @@ func openControl(path string) (int, error) { return -1, nil }
 func closeControl(fd int) {}
 
 func disableAutosuspend(path string) {}
+
+func runtimeSuspended(path string) (time.Duration, error) { return 0, errors.ErrUnsupported }
 
 func adviseUnstablePath(path string) {}
 

@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -177,6 +179,31 @@ func autosuspendControlPath(sysRoot, devPath string) (string, error) {
 		return "", fmt.Errorf("%s has no power/control: %w", dir, err)
 	}
 	return control, nil
+}
+
+// suspendedTime is how long, in total, the kernel has held the USB device behind path in runtime
+// suspend — power/runtime_suspended_time, in milliseconds. The counter is cumulative, which makes
+// it evidence where power/control is only policy: a reading that moves while the port is open is
+// a suspend that actually happened, whatever the control file said. Reading it needs no
+// privilege, so the tether that cannot write power/control can still watch for the result.
+func suspendedTime(sysRoot, path string) (time.Duration, error) {
+	dir, err := usbDeviceDir(sysRoot, path)
+	if err != nil {
+		return 0, err
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "power", "runtime_suspended_time"))
+	if err != nil {
+		return 0, fmt.Errorf("reading the suspend counter of %s: %w", dir, err)
+	}
+	ms, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parsing the suspend counter of %s: %w", dir, err)
+	}
+	return time.Duration(ms) * time.Millisecond, nil
+}
+
+func runtimeSuspended(path string) (time.Duration, error) {
+	return suspendedTime("/sys", path)
 }
 
 // describeUSB reads the descriptors that identify which adapter this is. They are what the

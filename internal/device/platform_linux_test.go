@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"briard.io/tether/internal/family"
 )
@@ -169,6 +170,27 @@ func TestAutosuspendControlPathErrorsRatherThanGuessing(t *testing.T) {
 			t.Errorf("walked to %s, want an error: the path does not exist", got)
 		}
 	})
+}
+
+// The counter belongs to the USB device, one level above the interface the tty hangs off — the
+// same walk as power/control — and is in milliseconds.
+func TestSuspendedTimeReadsTheDevicesCounter(t *testing.T) {
+	sysRoot, devPath := fixtureSys(t, true, true)
+	if _, err := suspendedTime(sysRoot, devPath); err == nil {
+		t.Error("read a counter the fixture does not have, want an error rather than a zero")
+	}
+
+	counter := filepath.Join(sysRoot, "devices", "pci0000:00", "usb1", "1-1", "power", "runtime_suspended_time")
+	if err := os.WriteFile(counter, []byte("1234\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	got, err := suspendedTime(sysRoot, devPath)
+	if err != nil {
+		t.Fatalf("suspendedTime: %v", err)
+	}
+	if got != 1234*time.Millisecond {
+		t.Errorf("suspendedTime = %v, want 1.234s", got)
+	}
 }
 
 func TestDescribeUSBReadsTheDescriptorsTheTableNeeds(t *testing.T) {

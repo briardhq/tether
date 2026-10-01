@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -30,6 +31,10 @@ func openControl(path string) (int, error) { return -1, nil }
 func closeControl(fd int) {}
 
 func disableAutosuspend(path string) {}
+
+// runtimeSuspended has no counter to read: selective suspend is the driver's business here, and
+// no driver publishes how long a device has spent in it.
+func runtimeSuspended(path string) (time.Duration, error) { return 0, errors.ErrUnsupported }
 
 // adviseUnstablePath has nothing to advise. A COM name is already per device *instance*, so a
 // stick with a serial number keeps its number across replugs and there is no second, stabler

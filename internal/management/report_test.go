@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"path/filepath"
@@ -27,7 +28,7 @@ func TestStatusSocketAnswersWithTheCard(t *testing.T) {
 
 	m := NewMonitor(p, nil)
 
-	m.DeviceOpened(family.ZNP)
+	m.DeviceOpened(family.ZNP, nil)
 	if _, err := m.Probe(); err != nil {
 		t.Fatalf("probing: %v", err)
 	}
@@ -87,7 +88,7 @@ func TestASilentRadioIsRecordedAsAFailedProbe(t *testing.T) {
 
 	m := NewMonitor(p, nil)
 
-	m.DeviceOpened(family.ZNP)
+	m.DeviceOpened(family.ZNP, nil)
 	if card := m.Card(); card.Probe != nil {
 		t.Fatalf("a monitor that has not probed reports %+v", card.Probe)
 	}
@@ -120,7 +121,7 @@ func TestABusyDeviceDoesNotOverwriteTheLastProbe(t *testing.T) {
 
 	m := NewMonitor(p, nil)
 
-	m.DeviceOpened(family.ZNP)
+	m.DeviceOpened(family.ZNP, nil)
 	if _, err := m.Probe(); err != nil {
 		t.Fatalf("the first probe: %v", err)
 	}
@@ -139,6 +140,69 @@ func TestABusyDeviceDoesNotOverwriteTheLastProbe(t *testing.T) {
 	}
 }
 
+// Only suspend time accrued while tether holds the port is an alarm. What the counter says at
+// open happened while nobody held it — harmless, since the open resumed it — and a replug
+// starts a new device whose counter may be lower than the last one's.
+func TestASuspendWhileHeldRaisesTheAlarm(t *testing.T) {
+	radio := newFakeRadio(func([]byte) []byte { return nil })
+	defer radio.stop()
+	p := pipe.New(nil)
+	p.Serve(radio)
+	m := NewMonitor(p, nil)
+
+	counter := 5 * time.Second
+	read := func() (time.Duration, error) { return counter, nil }
+
+	m.DeviceOpened(family.EZSP, read)
+	m.checkSuspend()
+	card := m.Card()
+	if card.SuspendedMs == nil || *card.SuspendedMs != 0 {
+		t.Fatalf("a suspend before the open counted: %s", msOf(card.SuspendedMs))
+	}
+	if strings.Contains(card.Summary(), "SUSPENDED") {
+		t.Errorf("the summary alarms with nothing suspended: %s", card.Summary())
+	}
+
+	counter += 300 * time.Millisecond
+	m.checkSuspend()
+	card = m.Card()
+	if card.SuspendedMs == nil || *card.SuspendedMs != 300 {
+		t.Fatalf("a suspend while held reads as %s, want 300 ms", msOf(card.SuspendedMs))
+	}
+	if card.SuspendedAt.IsZero() {
+		t.Error("the suspend has no time on it")
+	}
+	if !strings.Contains(card.Summary(), "USB SUSPENDED 300ms WHILE HELD") {
+		t.Errorf("the summary does not raise the alarm: %s", card.Summary())
+	}
+
+	// A counter read after the device went away must not be charged to the next one.
+	m.NoDevice("the device stopped")
+	counter = 100 * time.Millisecond
+	m.checkSuspend()
+	m.DeviceOpened(family.EZSP, read)
+	counter += 50 * time.Millisecond
+	m.checkSuspend()
+	if got := *m.Card().SuspendedMs; got != 350 {
+		t.Errorf("after a replug the total is %d ms, want 350", got)
+	}
+}
+
+// A platform with no counter must not render as an adapter that never suspended.
+func TestNoSuspendCounterLeavesTheFieldAbsent(t *testing.T) {
+	radio := newFakeRadio(func([]byte) []byte { return nil })
+	defer radio.stop()
+	p := pipe.New(nil)
+	p.Serve(radio)
+	m := NewMonitor(p, nil)
+
+	m.DeviceOpened(family.EZSP, func() (time.Duration, error) { return 0, errors.ErrUnsupported })
+	m.checkSuspend()
+	if got := m.Card().SuspendedMs; got != nil {
+		t.Errorf("an unwatched adapter reports %d ms suspended, want the field absent", *got)
+	}
+}
+
 // A family with no probe must not look like a radio that failed one.
 func TestAnUnprobedFamilyReportsNoProbeRatherThanAFailure(t *testing.T) {
 	radio := newFakeRadio(func([]byte) []byte { return nil })
@@ -148,7 +212,7 @@ func TestAnUnprobedFamilyReportsNoProbeRatherThanAFailure(t *testing.T) {
 
 	m := NewMonitor(p, nil)
 
-	m.DeviceOpened(family.EZSP)
+	m.DeviceOpened(family.EZSP, nil)
 	ctx, stop := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer stop()
 	m.Run(ctx, 50*time.Millisecond, time.Hour)
@@ -176,7 +240,7 @@ func TestAProbeLeavesTheCensusUntouched(t *testing.T) {
 	p := pipe.New(census.Observe)
 	m := NewMonitor(p, census)
 	p.Serve(radio)
-	m.DeviceOpened(family.ZNP)
+	m.DeviceOpened(family.ZNP, nil)
 
 	if _, err := m.Probe(); err != nil {
 		t.Fatalf("probing: %v", err)
@@ -225,7 +289,7 @@ func TestTheCensusCountsWhatCrossesThePipeWithoutAlteringIt(t *testing.T) {
 	// for when the device opens, and the device opens before any listener exists (INV 2). A
 	// client cannot therefore send a frame the census was not yet switched on for.
 	p.Serve(radio)
-	m.DeviceOpened(family.ZNP)
+	m.DeviceOpened(family.ZNP, nil)
 
 	client, server := net.Pipe()
 	defer client.Close()
@@ -257,4 +321,11 @@ func TestTheCensusCountsWhatCrossesThePipeWithoutAlteringIt(t *testing.T) {
 	if card := m.Card(); card.Frames.UnframedBytes != 0 {
 		t.Errorf("%d bytes of a clean stream were called unframed", card.Frames.UnframedBytes)
 	}
+}
+
+func msOf(p *uint64) string {
+	if p == nil {
+		return "absent"
+	}
+	return fmt.Sprintf("%d ms", *p)
 }

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"sync/atomic"
+	"time"
 
 	"github.com/briardhq/go-serial"
 
@@ -135,6 +136,14 @@ func (p *Port) Write(b []byte) (int, error) {
 func (p *Port) Close() error {
 	p.closed.Store(true)
 	return p.port.Close()
+}
+
+// SuspendedTime is how long, in total, the USB layer has held this adapter suspended. It is the
+// evidence of USB autosuspend actually happening, rather than of it being permitted: a reading
+// that moves while the port is open means the coordinator went to sleep under its client.
+// errors.ErrUnsupported where the platform keeps no such counter.
+func (p *Port) SuspendedTime() (time.Duration, error) {
+	return runtimeSuspended(p.path)
 }
 
 // classify maps a driver or library error onto ErrGone where it means the device left.

@@ -294,7 +294,7 @@ func hold(ctx context.Context, opts Options, p *pipe.Pipe, m *management.Monitor
 				at.path, at.params.Radio, radio)
 		}
 		radio = at.params.Radio
-		m.DeviceOpened(radio)
+		m.DeviceOpened(radio, port.SuspendedTime)
 
 		err = generation(ctx, opts, at, p, port, m)
 

@@ -40,7 +40,7 @@ func TestStatusVerbReadsARunningTether(t *testing.T) {
 	p.Serve(radio)
 
 	m := management.NewMonitor(p, nil)
-	m.DeviceOpened(family.ZNP)
+	m.DeviceOpened(family.ZNP, nil)
 	if _, err := m.Probe(); err != nil {
 		t.Fatalf("probing: %v", err)
 	}
@@ -249,6 +249,38 @@ func TestRenderSaysWhenTheDeviceIsMissing(t *testing.T) {
 	}
 	if !strings.Contains(gone.String(), "37 open attempts") {
 		t.Errorf("the reopen attempts are not shown:\n%s", gone.String())
+	}
+}
+
+// Three readings, three renderings: no counter on this platform says nothing, a counter at zero
+// says so, and a suspend while held is shouted.
+func TestRenderSaysWhenTheAdapterWasSuspended(t *testing.T) {
+	now := time.Now()
+	base := management.Card{StartedAt: now.Add(-time.Hour), Now: now, RadioType: "znp", DevicePresent: true}
+
+	var unwatched bytes.Buffer
+	render(&unwatched, base)
+	if strings.Contains(unwatched.String(), "suspend") {
+		t.Errorf("a platform with no counter rendered a suspend line:\n%s", unwatched.String())
+	}
+
+	zero := uint64(0)
+	quiet := base
+	quiet.SuspendedMs = &zero
+	var never bytes.Buffer
+	render(&never, quiet)
+	if !strings.Contains(never.String(), "never while held") {
+		t.Errorf("a watched adapter that never suspended rendered as:\n%s", never.String())
+	}
+
+	slept := uint64(2500)
+	asleep := base
+	asleep.SuspendedMs = &slept
+	asleep.SuspendedAt = now.Add(-time.Minute)
+	var loud bytes.Buffer
+	render(&loud, asleep)
+	if !strings.Contains(loud.String(), "USB SUSPENDED 2.5s while held, last 1m0s ago") {
+		t.Errorf("a suspend while held rendered as:\n%s", loud.String())
 	}
 }
 
