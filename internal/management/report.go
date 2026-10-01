@@ -208,7 +208,7 @@ func (m *Monitor) Probe() (Result, error) {
 // suspended reads the adapter's cumulative USB suspend counter, and may be nil. Its first
 // reading is the baseline: what the counter says at open happened while nobody held the port.
 //
-// restart resets this adapter's radio, and is nil where no restart is known for it.
+// restart resets this adapter's radio, and is nil where it has no reset line to use.
 func (m *Monitor) DeviceOpened(radio family.Radio, suspended func() (time.Duration, error), restart func() error) {
 	m.census.Adopt(radio)
 

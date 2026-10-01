@@ -129,7 +129,7 @@ func TestARestartRefusesWhereNoneIsKnown(t *testing.T) {
 	t.Run("no restart for the adapter", func(t *testing.T) {
 		m := NewMonitor(pipe.New(nil), nil)
 		m.DeviceOpened(family.ZNP, nil, nil)
-		if got := m.Restart(); got.OK || !strings.Contains(got.Error, "no restart is known") {
+		if got := m.Restart(); got.OK || !strings.Contains(got.Error, "no reset line") {
 			t.Errorf("Restart = %+v, want a refusal", got)
 		}
 	})

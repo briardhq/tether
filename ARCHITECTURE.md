@@ -257,13 +257,12 @@ that line.
   it the close is an unplug, which both clients already recover from (INV 3). The reset line does
   not move until the client's reader has stopped. Refusing would leave whoever asked to stop the
   client by hand — the same reasoning that makes a new client displace an old one (INV 4).
-- **Per adapter, and only where measured.** Which line reaches the radio's reset pin is a property
-  of the board, and the line that resets one board is the bootloader line on another. Today that
-  is the **Sonoff ZBDongle-P**: DTR lowered with RTS left raised holds the radio in reset, and
-  raising it again lets it boot — the same state zigpy-znp and zigbee-herdsman use to reset a TI
-  stick over serial. Every other adapter refuses, and a replug is the restart that always works.
-  On the **Connect ZBT-2** neither line reaches the radio at all: it answers normally with either
-  or both held low.
+- **TI sticks only.** DTR lowered with RTS left raised holds a TI radio in reset, and raising it
+  again lets it boot — the reset state zigpy-znp puts every TI stick through at each serial
+  connect, and zigbee-herdsman as a fallback; measured on the Sonoff ZBDongle-P. No other family
+  has a reset line: on the **Connect ZBT-2** and the **ConBee II** neither line reaches the radio
+  (each answers normally with either or both held low), and no host stack resets a Silabs or
+  dresden stick by line. They refuse, and a replug is the restart that always works.
 - **Confirmed, not assumed.** The radio announces its boot with a `SYS ResetInd` about two seconds
   after the line rises. Only that counts, and a ping after it puts a fresh answer on the card. A
   pulse with no announcement is a failure: it looks exactly like a reset line wired somewhere else.

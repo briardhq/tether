@@ -55,11 +55,11 @@ func (m *Monitor) Restart() RestartResult {
 	case !present:
 		return failed("no adapter is open")
 	case act == nil:
-		return failed("no restart is known for this adapter; unplugging it and plugging it back " +
-			"in is the restart that always works")
+		return failed("this adapter has no reset line tether can use — only TI (ZNP) sticks " +
+			"do; unplugging it and plugging it back in is the restart that always works")
 	case radio != family.ZNP:
-		// The restart is confirmed by a ZNP frame. Every measured entry is a ZNP stick; this
-		// is a stick named as another family in the config, which nothing here can confirm.
+		// The restart is confirmed by a ZNP frame, and only TI rows have one; this is a TI
+		// stick named as another family in the config, which nothing here can confirm.
 		return failed(fmt.Sprintf("a restart is confirmed by a ZNP reset indication, and this "+
 			"adapter is configured as %s", radio))
 	}

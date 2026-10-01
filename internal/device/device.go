@@ -151,7 +151,7 @@ func (p *Port) SuspendedTime() (time.Duration, error) {
 // and nothing waits on it but the verb's own caller.
 const resetHold = 100 * time.Millisecond
 
-// Restart resets the radio by the adapter's measured method, and returns once the reset line
+// Restart resets the radio by the adapter's method, and returns once the reset line
 // is released — the radio is booting, not booted. It is the one place a control line is moved
 // on purpose (INV 7), and only the restart verb reaches it.
 //
@@ -160,7 +160,7 @@ const resetHold = 100 * time.Millisecond
 // rises or the adapter is replugged.
 func (p *Port) Restart(how family.Restart) error {
 	if how != family.RestartDTR {
-		return errors.New("no restart is known for this adapter")
+		return errors.New("this adapter has no reset line tether can use")
 	}
 	if err := p.port.SetDTR(false); err != nil {
 		return fmt.Errorf("lowering DTR: %w", classify(err, p.closed.Load()))

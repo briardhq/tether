@@ -235,24 +235,18 @@ func TestDeviceLabel(t *testing.T) {
 	}
 }
 
-// The restart table is keyed by name, so a row renamed under it would silently lose its
-// restart. Every key must still be a name the table gives out.
-func TestEveryRestartNamesARow(t *testing.T) {
-	names := map[string]bool{}
+// Every TI row restarts by DTR and nothing else does. Checked over the whole table so that a
+// row added later lands on the right side without anyone remembering to say so — and with the
+// ZBDongle-E pinned by name, because it shares the ZBDongle-P's ids and the words "dongle plus"
+// and is a Silabs radio whose lines reach nothing.
+func TestOnlyTIAdaptersHaveARestart(t *testing.T) {
 	for _, r := range table {
-		names[r.name] = true
-	}
-	for name := range restarts {
-		if !names[name] {
-			t.Errorf("restarts has %q, which no row is called", name)
+		d := Device{Vendor: r.vendor, Product: r.product, Name: r.match}
+		got := RestartOf(d)
+		if want := map[bool]Restart{true: RestartDTR, false: NoRestart}[r.params.Radio == ZNP]; got != want {
+			t.Errorf("RestartOf(%s) = %q, want %q", r.name, got, want)
 		}
 	}
-}
-
-// The measured stick has a restart, and its EZSP sibling sharing the same ids and the words
-// "dongle plus" does not inherit it — the line that resets one board may be the bootloader
-// line on the other.
-func TestRestartIsPerAdapter(t *testing.T) {
 	if got := RestartOf(sonoffP); got != RestartDTR {
 		t.Errorf("RestartOf(the ZBDongle-P) = %q, want %q", got, RestartDTR)
 	}
