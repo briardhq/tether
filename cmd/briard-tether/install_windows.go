@@ -37,10 +37,11 @@ import (
 // running `briard-tether run` in a console, which works and is what the report says.
 const (
 	firewallRule = "briard-tether"
-	// The service is LocalSystem, which is this platform's `User=root`, and it is the same
-	// single reason: USB selective suspend lives under HKLM and nothing less can write it.
-	// Everything else tether does — serving TCP, advertising, reading descriptors, opening a
-	// COM port — needs no privilege at all.
+	// The service is LocalSystem, this platform's `User=root`, as headroom rather than for a
+	// write tether makes. Nothing it does needs privilege with the adapters it has been run
+	// against — serving TCP, advertising, reading descriptors, opening the COM port, holding
+	// the machine out of idle sleep — but who may open a device is its driver's decision, and
+	// a driver nobody here has tried must not be the reason a coordinator is refused.
 	serviceAccount = "" // empty means LocalSystem
 )
 
@@ -268,10 +269,10 @@ func report(out io.Writer, source, binary string, copied, replaced, eventSource,
 		fmt.Fprintf(out, "%-11s Event Viewer, Windows Logs, Application, source %s\n", "log", serviceName)
 	}
 	fmt.Fprintf(out, "%-11s briard-tether status\n", "card")
-	fmt.Fprintf(out, "\n  LocalSystem is the one privileged thing here, and it is for USB selective\n"+
-		"  suspend: nothing less can write the driver's power settings, and that is the\n"+
-		"  \"works fine, then dies after N minutes\" failure. Everything else tether does\n"+
-		"  needs no privilege.\n\n")
+	fmt.Fprintf(out, "\n  LocalSystem is the one privileged thing here, and it is headroom: nothing tether\n"+
+		"  does needs privilege with the adapters it has been tested against, but who may\n"+
+		"  open a device is up to its driver, and an untested one should not be the reason\n"+
+		"  a coordinator is refused.\n\n")
 }
 
 // uninstallVerb removes what install wrote.
