@@ -1,4 +1,7 @@
-# Not a gate — a button. `workflow_dispatch` only, so nothing here can go red in the commit loop.
+# A button per commit, a gate per release. `workflow_dispatch` runs it by hand, and release.yml
+# calls it (`workflow_call`) beside ci.yml, so no tag publishes a Windows binary whose tests did not
+# pass on Windows. Nothing runs it per commit, so it cannot go red in the commit loop.
+#
 # It runs the portable unit tests on Windows: cross-built on Linux and executed over there, with no
 # Go toolchain on the Windows side.
 #
@@ -15,10 +18,11 @@
 # There is no `schedule:` on purpose. A monthly run is a standing test by another name: it lands in
 # nobody's inbox when it breaks, and what it would catch — Windows changing underneath us — the next
 # real run on a real machine catches anyway, on hardware that can also reach a COM port.
-name: windows units (on demand)
+name: windows units
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

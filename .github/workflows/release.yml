@@ -25,8 +25,13 @@ jobs:
   gate:
     uses: ./.github/workflows/ci.yml
 
+  # The portable unit tests, run on Windows. Per commit only the cross-compile guards Windows; a
+  # release ships a Windows binary, so its tests run there before it does.
+  windows:
+    uses: ./.github/workflows/windows.yml
+
   release:
-    needs: gate
+    needs: [gate, windows]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

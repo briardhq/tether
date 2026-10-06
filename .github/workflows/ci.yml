@@ -8,9 +8,9 @@
 # the client-gate tier is not hardware-bound as a class — only most of it is.
 #
 # Nor are the Windows unit tests, which have a workflow of their own — `windows.yml`, a button
-# rather than a gate. The Windows *seam* is guarded here per commit by the cross-compile step
-# below, which is the half of it a commit can break; running those tests is something a person
-# asks for. That file argues it.
+# per commit and a gate per release. The Windows *seam* is guarded here per commit by the
+# cross-compile step below, which is the half of it a commit can break; running those tests is
+# something a person asks for, or a release does. That file argues it.
 name: ci
 
 # Branches only, not tags: a tag runs release.yml, which calls this whole workflow as its gate
