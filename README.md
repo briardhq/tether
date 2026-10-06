@@ -1,6 +1,8 @@
 # briard-tether
 
-**Serve a USB Zigbee coordinator to Home Assistant's ZHA or to zigbee2mqtt over the network.** Run
+**Turn your Zigbee dongle into a zero-config network coordinator.**
+
+Serves a USB Zigbee coordinator to Home Assistant's ZHA or to zigbee2mqtt over the network. Run
 it on the machine the dongle is plugged into; the client can live anywhere, including a VM. Built
 by the [briard](https://briard.io) project, and works standalone.
 
